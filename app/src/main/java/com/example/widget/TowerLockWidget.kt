@@ -14,34 +14,42 @@ import com.example.telephony.CellModel
 class TowerLockWidget : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        val cell = readState(context)
         for (appWidgetId in appWidgetIds) {
-            updateAppWidget(context, appWidgetManager, appWidgetId, null)
+            updateAppWidget(context, appWidgetManager, appWidgetId, cell, readAddress(context))
         }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == "com.example.widget.UPDATE_STATE") {
-            val tech = intent.getStringExtra("TECH") ?: "Unknown"
-            val band = intent.getStringExtra("BAND") ?: "Unknown"
-            val rsrp = intent.getIntExtra("RSRP", -140)
-            val address = intent.getStringExtra("ADDRESS") ?: "Unmapped cell tower"
-
+        if (intent.action == ACTION_REFRESH) {
+            // State is read from app-private prefs rather than intent extras, so a
+            // forged broadcast can at most trigger a refresh of trusted data —
+            // it can never inject spoofed tower info into the widget.
             val appWidgetManager = AppWidgetManager.getInstance(context)
             val thisWidget = ComponentName(context, TowerLockWidget::class.java)
             val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
 
-            val tempCell = CellModel(
-                tech = tech,
-                bandName = band,
-                rsrp = rsrp
-            )
-
+            val cell = readState(context)
             for (appWidgetId in appWidgetIds) {
-                updateAppWidget(context, appWidgetManager, appWidgetId, tempCell, address)
+                updateAppWidget(context, appWidgetManager, appWidgetId, cell, readAddress(context))
             }
         }
     }
+
+    private fun readState(context: Context): CellModel? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.contains("tech")) return null
+        return CellModel(
+            tech = prefs.getString("tech", "Unknown") ?: "Unknown",
+            bandName = prefs.getString("band", "Unknown") ?: "Unknown",
+            rsrp = prefs.getInt("rsrp", -140)
+        )
+    }
+
+    private fun readAddress(context: Context): String? =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString("address", null)
 
     private fun updateAppWidget(
         context: Context,
@@ -87,13 +95,18 @@ class TowerLockWidget : AppWidgetProvider() {
     }
 
     companion object {
+        private const val PREFS_NAME = "TowerLockWidgetState"
+        private const val ACTION_REFRESH = "com.example.widget.UPDATE_STATE"
+
         fun sendWidgetUpdate(context: Context, cell: CellModel, address: String) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString("tech", cell.tech)
+                .putString("band", cell.bandName)
+                .putInt("rsrp", cell.rsrp)
+                .putString("address", address)
+                .apply()
             val intent = Intent(context, TowerLockWidget::class.java).apply {
-                action = "com.example.widget.UPDATE_STATE"
-                putExtra("TECH", cell.tech)
-                putExtra("BAND", cell.bandName)
-                putExtra("RSRP", cell.rsrp)
-                putExtra("ADDRESS", address)
+                action = ACTION_REFRESH
             }
             context.sendBroadcast(intent)
         }

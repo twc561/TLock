@@ -17,13 +17,22 @@ import kotlinx.coroutines.launch
 abstract class AppDatabase : RoomDatabase() {
     abstract fun cellDao(): CellDao
 
+    /**
+     * Flushes the write-ahead log into the main database file. Must be called before
+     * copying the file for a backup, otherwise recent writes are missing from the copy.
+     * Call from a background thread.
+     */
+    fun checkpoint() {
+        query("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+                INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "towerlock_database"
@@ -31,8 +40,18 @@ abstract class AppDatabase : RoomDatabase() {
                 .addCallback(DatabaseCallback(scope))
                 .fallbackToDestructiveMigration()
                 .build()
-                INSTANCE = instance
-                instance
+                .also { INSTANCE = it }
+            }
+        }
+
+        /**
+         * Closes the singleton connection so the underlying file can be replaced
+         * (e.g. during a restore). The next [getDatabase] call reopens it.
+         */
+        fun closeInstance() {
+            synchronized(this) {
+                INSTANCE?.close()
+                INSTANCE = null
             }
         }
 

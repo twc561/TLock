@@ -9,19 +9,20 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,7 +33,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -50,14 +50,15 @@ import com.example.ui.screens.LogsScreen
 import com.example.ui.screens.MapScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.theme.TlTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -75,7 +76,7 @@ class MainActivity : ComponentActivity() {
             val binder = service as TowerMonitoringService.LocalBinder
             monitoringService = binder.getService()
             isBound = true
-            
+
             cancelServiceJobs()
             // Connect flow
             serviceJobs.add(lifecycleScope.launch {
@@ -161,18 +162,29 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startAndBindService() {
-        val intent = Intent(this, TowerMonitoringService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        try {
+            val intent = Intent(this, TowerMonitoringService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        } catch (e: Exception) {
+            // Foreground-service starts can be rejected (background restrictions,
+            // battery saver); surface the failure instead of crashing.
+            Log.e("MainActivity", "Unable to start monitoring service", e)
+            Toast.makeText(this, "Could not start monitoring: ${e.message}", Toast.LENGTH_LONG).show()
         }
-        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
     private fun stopAndUnbindService() {
         if (isBound) {
-            unbindService(serviceConnection)
+            try {
+                unbindService(serviceConnection)
+            } catch (e: IllegalArgumentException) {
+                Log.w("MainActivity", "Service already unbound", e)
+            }
             isBound = false
         }
         stopService(Intent(this, TowerMonitoringService::class.java))
@@ -188,51 +200,82 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun backupDatabase() {
-        try {
-            val dbFile = getDatabasePath("towerlock_database")
-            val backupFile = File(getExternalFilesDir(null), "towerlock_database.bak")
-            
-            if (dbFile.exists()) {
-                FileInputStream(dbFile).use { input ->
-                    FileOutputStream(backupFile).use { output ->
-                        input.copyTo(output)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val dbFile = getDatabasePath("towerlock_database")
+                val backupFile = File(getExternalFilesDir(null), "towerlock_database.bak")
+
+                if (dbFile.exists()) {
+                    // Flush the write-ahead log into the main file first, otherwise the
+                    // copy silently misses everything logged since the last checkpoint.
+                    AppDatabase.getDatabase(this@MainActivity, lifecycleScope).checkpoint()
+                    FileInputStream(dbFile).use { input ->
+                        FileOutputStream(backupFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Backup saved to: ${backupFile.name}", Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Database not found", Toast.LENGTH_SHORT).show()
                     }
                 }
-                Toast.makeText(this, "Backup saved to: ${backupFile.name}", Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(this, "Database not found", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Backup failed", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Backup failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Backup failed: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun restoreDatabase() {
-        try {
-            val dbFile = getDatabasePath("towerlock_database")
-            val backupFile = File(getExternalFilesDir(null), "towerlock_database.bak")
-            
-            if (backupFile.exists()) {
+        val backupFile = File(getExternalFilesDir(null), "towerlock_database.bak")
+        if (!backupFile.exists()) {
+            Toast.makeText(this, "Backup file not found", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // The service holds its own DB handle, so it must stop before we swap files.
+        stopAndUnbindService()
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Close the open connection so SQLite isn't holding the file mid-copy,
+                // and drop stale WAL/SHM journals so the restored snapshot is authoritative.
+                AppDatabase.closeInstance()
+                val dbFile = getDatabasePath("towerlock_database")
+                File(dbFile.path + "-wal").delete()
+                File(dbFile.path + "-shm").delete()
                 FileInputStream(backupFile).use { input ->
                     FileOutputStream(dbFile).use { output ->
                         input.copyTo(output)
                     }
                 }
-                Toast.makeText(this, "Restore successful! Restarting monitor...", Toast.LENGTH_LONG).show()
-                stopAndUnbindService()
-                startAndBindService()
-            } else {
-                Toast.makeText(this, "Backup file not found", Toast.LENGTH_SHORT).show()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Restore successful! Restarting monitor...", Toast.LENGTH_LONG).show()
+                    // Recreate so every screen and the service reconnect to the restored database.
+                    recreate()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Restore failed", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Restore failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Restore failed: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         if (isBound) {
-            unbindService(serviceConnection)
+            try {
+                unbindService(serviceConnection)
+            } catch (e: IllegalArgumentException) {
+                Log.w("MainActivity", "Service already unbound", e)
+            }
             isBound = false
         }
     }
@@ -265,17 +308,22 @@ fun MainAppScreen(
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
-        val granted = perms.values.all { it }
-        hasPermissions = granted
-        if (granted) {
+        // Notifications are nice-to-have; only location + phone state gate monitoring.
+        val requiredGranted = listOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.READ_PHONE_STATE
+        ).all { perms[it] == true || ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+        hasPermissions = requiredGranted
+        if (requiredGranted) {
             isMonitoringActive = true
             onStartService()
         } else {
-            Toast.makeText(context, "Permissions required for monitoring", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Location & phone permissions are required for monitoring", Toast.LENGTH_LONG).show()
         }
     }
 
     Scaffold(
+        containerColor = TlTheme.colors.background,
         topBar = {
             if (hasPermissions) {
                 TowerLockTopBar(
@@ -293,53 +341,44 @@ fun MainAppScreen(
         },
         bottomBar = {
             if (hasPermissions) {
+                val navItemColors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = TlTheme.colors.emerald,
+                    selectedTextColor = TlTheme.colors.emerald,
+                    unselectedIconColor = TlTheme.colors.textMuted,
+                    unselectedTextColor = TlTheme.colors.textMuted,
+                    indicatorColor = TlTheme.colors.emerald.copy(alpha = 0.15f)
+                )
                 NavigationBar(
-                    containerColor = Color(0xFF1E293B),
-                    contentColor = Color.White
+                    containerColor = TlTheme.colors.surface,
+                    contentColor = TlTheme.colors.textPrimary
                 ) {
                     NavigationBarItem(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
                         icon = { Icon(imageVector = Icons.Default.Dashboard, contentDescription = "Dashboard") },
                         label = { Text("Status") },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color(0xFF10B981),
-                            unselectedIconColor = Color.Gray,
-                            selectedTextColor = Color(0xFF10B981)
-                        )
+                        colors = navItemColors
                     )
                     NavigationBarItem(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
                         icon = { Icon(imageVector = Icons.Default.Map, contentDescription = "Map") },
                         label = { Text("Map") },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color(0xFF10B981),
-                            unselectedIconColor = Color.Gray,
-                            selectedTextColor = Color(0xFF10B981)
-                        )
+                        colors = navItemColors
                     )
                     NavigationBarItem(
                         selected = selectedTab == 2,
                         onClick = { selectedTab = 2 },
                         icon = { Icon(imageVector = Icons.Default.History, contentDescription = "Logs") },
                         label = { Text("Logs") },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color(0xFF10B981),
-                            unselectedIconColor = Color.Gray,
-                            selectedTextColor = Color(0xFF10B981)
-                        )
+                        colors = navItemColors
                     )
                     NavigationBarItem(
                         selected = selectedTab == 3,
                         onClick = { selectedTab = 3 },
                         icon = { Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings") },
                         label = { Text("Settings") },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color(0xFF10B981),
-                            unselectedIconColor = Color.Gray,
-                            selectedTextColor = Color(0xFF10B981)
-                        )
+                        colors = navItemColors
                     )
                 }
             }
@@ -363,7 +402,8 @@ fun MainAppScreen(
                     launcher.launch(permissionsNeeded.toTypedArray())
                 })
             } else {
-                when (selectedTab) {
+                Crossfade(targetState = selectedTab, label = "tabTransition") { tab ->
+                    when (tab) {
                     0 -> DashboardScreen(
                         cell = currentCell,
                         userLat = userLocation?.first,
@@ -464,6 +504,7 @@ fun MainAppScreen(
                             }
                         )
                     }
+                    }
                 }
             }
         }
@@ -479,11 +520,11 @@ fun TowerLockTopBar(isMonitoring: Boolean, onToggleMonitoring: () -> Unit) {
                 Icon(
                     imageVector = Icons.Default.SignalCellularAlt,
                     contentDescription = null,
-                    tint = com.example.ui.theme.TlEmerald,
+                    tint = TlTheme.colors.emerald,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("TowerLock", fontWeight = FontWeight.Bold, color = Color.White)
+                Text("TowerLock", fontWeight = FontWeight.Bold, color = TlTheme.colors.textPrimary)
             }
         },
         actions = {
@@ -492,13 +533,13 @@ fun TowerLockTopBar(isMonitoring: Boolean, onToggleMonitoring: () -> Unit) {
                 Icon(
                     imageVector = if (isMonitoring) Icons.Default.PauseCircle else Icons.Default.PlayCircle,
                     contentDescription = if (isMonitoring) "Stop monitoring" else "Start monitoring",
-                    tint = if (isMonitoring) com.example.ui.theme.TlTextSecondary else com.example.ui.theme.TlEmerald
+                    tint = if (isMonitoring) TlTheme.colors.textSecondary else TlTheme.colors.emerald
                 )
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = com.example.ui.theme.TlSurface,
-            titleContentColor = Color.White
+            containerColor = TlTheme.colors.surface,
+            titleContentColor = TlTheme.colors.textPrimary
         )
     )
 }
@@ -526,16 +567,16 @@ fun LiveStatusIndicator(isMonitoring: Boolean) {
                 .clip(CircleShape)
                 .background(
                     if (isMonitoring) {
-                        com.example.ui.theme.TlEmerald.copy(alpha = dotAlpha)
+                        TlTheme.colors.emerald.copy(alpha = dotAlpha)
                     } else {
-                        com.example.ui.theme.TlTextMuted
+                        TlTheme.colors.textMuted
                     }
                 )
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = if (isMonitoring) "LIVE" else "PAUSED",
-            color = if (isMonitoring) com.example.ui.theme.TlEmerald else com.example.ui.theme.TlTextMuted,
+            color = if (isMonitoring) TlTheme.colors.emerald else TlTheme.colors.textMuted,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold
         )
@@ -547,7 +588,7 @@ fun PermissionRationaleView(onRequestPermissions: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
+            .background(TlTheme.colors.background)
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -555,14 +596,14 @@ fun PermissionRationaleView(onRequestPermissions: () -> Unit) {
         Icon(
             imageVector = Icons.Default.Security,
             contentDescription = "Security Permissions",
-            tint = Color(0xFF10B981),
+            tint = TlTheme.colors.emerald,
             modifier = Modifier.size(80.dp)
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = "Fine Location & Telephony Access",
             style = MaterialTheme.typography.titleLarge,
-            color = Color.White,
+            color = TlTheme.colors.textPrimary,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
         )
@@ -570,18 +611,21 @@ fun PermissionRationaleView(onRequestPermissions: () -> Unit) {
         Text(
             text = "TowerLock Pro requires Fine Location and Read Phone State permissions to identify your active cellular serving base stations, calculate Timing Advance distances, and geocode nearby tower nodes.",
             style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF94A3B8),
+            color = TlTheme.colors.textSecondary,
             textAlign = TextAlign.Center,
             lineHeight = 22.sp
         )
         Spacer(modifier = Modifier.height(32.dp))
         Button(
             onClick = onRequestPermissions,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = TlTheme.colors.emerald,
+                contentColor = TlTheme.colors.onAccent
+            ),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Grant Required Permissions", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("Grant Required Permissions", fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

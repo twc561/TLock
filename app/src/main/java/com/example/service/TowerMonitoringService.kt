@@ -61,6 +61,9 @@ class TowerMonitoringService : Service() {
     private var iconStyle = "dBm" // "dBm", "band", "tech", "bars"
     private var alertRsearchBelow = -110 // Alert threshold for RSRP
     private var isLoggingPaused = false
+    // Monotonic ids keep alert notifications distinct without the collision risk
+    // of truncating System.currentTimeMillis() to Int.
+    private val alertNotificationId = java.util.concurrent.atomic.AtomicInteger(2000)
 
     inner class LocalBinder : Binder() {
         fun getService(): TowerMonitoringService = this@TowerMonitoringService
@@ -349,7 +352,17 @@ class TowerMonitoringService : Service() {
         }
     }
 
+    /**
+     * POST_NOTIFICATIONS is a runtime permission on Android 13+; posting without it
+     * is silently dropped (or raises AppOps warnings), so check before notifying.
+     */
+    private fun canPostNotifications(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+
     private fun triggerAlert(title: String, body: String) {
+        if (!canPostNotifications()) return
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -368,15 +381,26 @@ class TowerMonitoringService : Service() {
             builder.setVibrate(longArrayOf(0, 300, 100, 300))
         }
 
-        notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
+        try {
+            notificationManager.notify(alertNotificationId.incrementAndGet(), builder.build())
+        } catch (e: SecurityException) {
+            Log.w("TowerMonitoringService", "Alert notification rejected", e)
+        }
     }
 
     private fun startForegroundService() {
-        val notification = createNotification(CellModel())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        } else {
-            startForeground(1001, notification)
+        try {
+            val notification = createNotification(CellModel())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            } else {
+                startForeground(1001, notification)
+            }
+        } catch (e: Exception) {
+            // FGS starts can be rejected (e.g. missing while-in-use location permission
+            // on newer Android); stop cleanly instead of crashing the process.
+            Log.e("TowerMonitoringService", "Unable to enter foreground state", e)
+            stopSelf()
         }
     }
 
@@ -496,8 +520,13 @@ class TowerMonitoringService : Service() {
     }
 
     private fun updateNotification(cell: CellModel) {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(1001, createNotification(cell))
+        if (!canPostNotifications()) return
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.notify(1001, createNotification(cell))
+        } catch (e: SecurityException) {
+            Log.w("TowerMonitoringService", "Status notification rejected", e)
+        }
     }
 
     private fun createDynamicIcon(text: String): androidx.core.graphics.drawable.IconCompat {

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.example.data.CellLog
+import com.example.ui.theme.TlTheme
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -38,10 +39,12 @@ fun LogsScreen(
     onDeleteLog: (CellLog) -> Unit,
     onClearAllLogs: () -> Unit
 ) {
+    val tl = TlTheme.colors
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var techFilter by remember { mutableStateOf("All") }
     var selectedLogForDetail by remember { mutableStateOf<CellLog?>(null) }
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     // Filtered logs
     val filteredLogs = logs.filter { log ->
@@ -64,7 +67,7 @@ fun LogsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
+            .background(tl.background)
             .padding(16.dp)
     ) {
         // Search & Filter
@@ -79,13 +82,16 @@ fun LogsScreen(
                 placeholder = { Text("Search logs (CID, address, band)") },
                 modifier = Modifier.weight(1f),
                 colors = TextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedContainerColor = Color(0xFF1E293B),
-                    unfocusedContainerColor = Color(0xFF1E293B)
+                    focusedTextColor = tl.textPrimary,
+                    unfocusedTextColor = tl.textPrimary,
+                    focusedContainerColor = tl.surface,
+                    unfocusedContainerColor = tl.surface,
+                    focusedIndicatorColor = tl.emerald,
+                    unfocusedIndicatorColor = tl.outline,
+                    cursorColor = tl.emerald
                 ),
                 shape = RoundedCornerShape(8.dp),
-                leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search", tint = Color.Gray) }
+                leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search", tint = tl.textMuted) }
             )
 
             // Tech filter segmented buttons style
@@ -98,10 +104,13 @@ fun LogsScreen(
                             else -> "All"
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = tl.surface,
+                        contentColor = tl.textPrimary
+                    ),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text(techFilter, color = Color.White)
+                    Text(techFilter)
                 }
             }
         }
@@ -111,10 +120,10 @@ fun LogsScreen(
         // Session Stats Panel
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+            colors = CardDefaults.cardColors(containerColor = tl.surface)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                Text("Session Statistics", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                Text("Session Statistics", style = MaterialTheme.typography.titleSmall, color = tl.textPrimary, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -127,7 +136,7 @@ fun LogsScreen(
 
                 if (bandDistribution.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text("Band Distribution", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text("Band Distribution", style = MaterialTheme.typography.labelSmall, color = tl.textMuted)
                     BandDistributionPieChart(bandDistribution.toList().take(5).toMap()) // Limit to top 5 for neatness
                 }
             }
@@ -156,15 +165,15 @@ fun LogsScreen(
             Text(
                 text = "Log Entries (${filteredLogs.size})",
                 style = MaterialTheme.typography.titleMedium,
-                color = Color.White,
+                color = tl.textPrimary,
                 fontWeight = FontWeight.Bold
             )
             if (logs.isNotEmpty()) {
                 Text(
                     text = "Clear All",
-                    color = Color(0xFFEF4444),
+                    color = tl.red,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.clickable { onClearAllLogs() }
+                    modifier = Modifier.clickable { showClearConfirm = true }
                 )
             }
         }
@@ -182,7 +191,7 @@ fun LogsScreen(
                 Icon(
                     imageVector = if (logs.isEmpty()) Icons.Default.History else Icons.Default.Search,
                     contentDescription = null,
-                    tint = Color(0xFF475569),
+                    tint = tl.outline,
                     modifier = Modifier.size(48.dp)
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -192,7 +201,7 @@ fun LogsScreen(
                     } else {
                         "No logs match your search"
                     },
-                    color = Color.White,
+                    color = tl.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
@@ -202,7 +211,7 @@ fun LogsScreen(
                     } else {
                         "Try a different search term or tech filter."
                     },
-                    color = Color.Gray,
+                    color = tl.textMuted,
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 32.dp)
@@ -222,14 +231,42 @@ fun LogsScreen(
         }
     }
 
+    // Destructive action: require explicit confirmation before wiping the history.
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            containerColor = tl.surface,
+            titleContentColor = tl.textPrimary,
+            textContentColor = tl.textSecondary,
+            title = { Text("Clear all logs?") },
+            text = { Text("This permanently deletes all ${logs.size} logged tower events. This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearConfirm = false
+                    onClearAllLogs()
+                }) {
+                    Text("Delete All", color = tl.red, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) {
+                    Text("Cancel", color = tl.textSecondary)
+                }
+            }
+        )
+    }
+
     // Detail Dialog
     if (selectedLogForDetail != null) {
         val detail = selectedLogForDetail!!
         AlertDialog(
             onDismissRequest = { selectedLogForDetail = null },
+            containerColor = tl.surface,
+            titleContentColor = tl.textPrimary,
+            textContentColor = tl.textSecondary,
             confirmButton = {
                 TextButton(onClick = { selectedLogForDetail = null }) {
-                    Text("Close")
+                    Text("Close", color = tl.emerald)
                 }
             },
             title = { Text("Log Entry Details") },
@@ -254,20 +291,20 @@ fun LogsScreen(
 
 @Composable
 fun StatMetric(label: String, value: String) {
+    val tl = TlTheme.colors
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-        Text(text = value, style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = tl.textMuted)
+        Text(text = value, style = MaterialTheme.typography.titleMedium, color = tl.textPrimary, fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
 fun BandDistributionPieChart(distribution: Map<String, Int>) {
+    val tl = TlTheme.colors
     val total = distribution.values.sum().toFloat()
     if (total == 0f) return
 
-    val colors = listOf(
-        Color(0xFF38BDF8), Color(0xFFF59E0B), Color(0xFF10B981), Color(0xFFEC4899), Color(0xFF8B5CF6)
-    )
+    val colors = listOf(tl.sky, tl.amber, tl.emerald, tl.pink, Color(0xFF8B5CF6))
 
     Row(
         modifier = Modifier
@@ -306,7 +343,7 @@ fun BandDistributionPieChart(distribution: Map<String, Int>) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "${entry.key.substringBefore(" ")}: ${String.format(Locale.US, "%.1f%%", (entry.value / total) * 100)}",
-                        color = Color.White,
+                        color = tl.textPrimary,
                         fontSize = 11.sp
                     )
                 }
@@ -317,10 +354,14 @@ fun BandDistributionPieChart(distribution: Map<String, Int>) {
 
 @Composable
 fun RowScope.ExportButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    val tl = TlTheme.colors
     Button(
         onClick = onClick,
         modifier = Modifier.weight(1f),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = tl.surface,
+            contentColor = tl.textPrimary
+        ),
         shape = RoundedCornerShape(8.dp)
     ) {
         Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(16.dp))
@@ -331,11 +372,12 @@ fun RowScope.ExportButton(label: String, icon: androidx.compose.ui.graphics.vect
 
 @Composable
 fun LogItemCard(log: CellLog, onClick: () -> Unit, onDelete: () -> Unit) {
+    val tl = TlTheme.colors
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+        colors = CardDefaults.cardColors(containerColor = tl.surface)
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -346,25 +388,25 @@ fun LogItemCard(log: CellLog, onClick: () -> Unit, onDelete: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = log.tech,
-                        color = if (log.tech.contains("5G")) Color(0xFF10B981) else Color(0xFF38BDF8),
+                        color = if (log.tech.contains("5G")) tl.emerald else tl.sky,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = log.band, color = Color.Gray, fontSize = 11.sp)
+                    Text(text = log.band, color = tl.textMuted, fontSize = 11.sp)
                 }
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(text = log.address, color = Color.White, fontSize = 13.sp, maxLines = 1)
+                Text(text = log.address, color = tl.textPrimary, fontSize = 13.sp, maxLines = 1)
                 Text(
                     text = "CID: ${log.cellId} | gNB: ${log.nodebId} | RSRP: ${log.rsrp} dBm",
-                    color = Color.LightGray,
+                    color = tl.textSecondary,
                     fontSize = 11.sp
                 )
             }
             Icon(
                 imageVector = Icons.Default.Delete,
                 contentDescription = "Delete Log",
-                tint = Color(0xFFEF4444).copy(alpha = 0.8f),
+                tint = tl.red.copy(alpha = 0.8f),
                 modifier = Modifier
                     .size(20.dp)
                     .clickable { onDelete() }
@@ -375,6 +417,31 @@ fun LogItemCard(log: CellLog, onClick: () -> Unit, onDelete: () -> Unit) {
 
 // --- EXPORT FUNCTIONS ---
 
+/** Quotes a CSV field, doubling embedded quotes per RFC 4180. */
+private fun csvField(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
+
+/** Escapes reserved XML characters so addresses/names can't break the document. */
+private fun xmlEscape(value: String): String = value
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
+    .replace("'", "&apos;")
+
+/** Escapes a string for embedding inside a JSON string literal. */
+private fun jsonEscape(value: String): String = buildString {
+    value.forEach { c ->
+        when (c) {
+            '\\' -> append("\\\\")
+            '"' -> append("\\\"")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            else -> if (c < ' ') append(String.format(Locale.US, "\\u%04x", c.code)) else append(c)
+        }
+    }
+}
+
 private fun exportCsv(context: Context, logs: List<CellLog>) {
     if (logs.isEmpty()) {
         Toast.makeText(context, "No logs to export", Toast.LENGTH_SHORT).show()
@@ -383,18 +450,28 @@ private fun exportCsv(context: Context, logs: List<CellLog>) {
     val csv = StringBuilder("Timestamp,Tech,Operator,MCC,MNC,CellID,gNB_eNB,Sector,PCI,TAC,Band,RSRP,SINR,UserLat,UserLon,TowerLat,TowerLon,Address,Source\n")
     logs.forEach { log ->
         val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(log.timestamp))
-        csv.append("\"$date\",\"${log.tech}\",\"${log.operatorName}\",\"${log.mcc}\",\"${log.mnc}\",${log.cellId},${log.nodebId},${log.sectorId},${log.pci},${log.tac},\"${log.band}\",${log.rsrp},${log.sinr},${log.lat},${log.lon},${log.towerLat ?: 0.0},${log.towerLon ?: 0.0},\"${log.address}\",\"${log.source}\"\n")
+        csv.append(
+            listOf(
+                csvField(date), csvField(log.tech), csvField(log.operatorName), csvField(log.mcc), csvField(log.mnc),
+                "${log.cellId}", "${log.nodebId}", "${log.sectorId}", "${log.pci}", "${log.tac}",
+                csvField(log.band), "${log.rsrp}", "${log.sinr}", "${log.lat}", "${log.lon}",
+                "${log.towerLat ?: 0.0}", "${log.towerLon ?: 0.0}", csvField(log.address), csvField(log.source)
+            ).joinToString(",")
+        ).append("\n")
     }
     shareFile(context, csv.toString(), "towerlock_logs.csv", "text/csv")
 }
 
 private fun exportKml(context: Context, logs: List<CellLog>) {
-    if (logs.isEmpty()) return
+    if (logs.isEmpty()) {
+        Toast.makeText(context, "No logs to export", Toast.LENGTH_SHORT).show()
+        return
+    }
     val kml = StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\">\n<Document>\n")
     logs.forEach { log ->
         kml.append("<Placemark>\n")
-        kml.append("  <name>${log.tech} (${log.nodebId})</name>\n")
-        kml.append("  <description>Band: ${log.band}\nAddress: ${log.address}\nRSRP: ${log.rsrp} dBm</description>\n")
+        kml.append("  <name>${xmlEscape("${log.tech} (${log.nodebId})")}</name>\n")
+        kml.append("  <description>${xmlEscape("Band: ${log.band}\nAddress: ${log.address}\nRSRP: ${log.rsrp} dBm")}</description>\n")
         kml.append("  <Point>\n")
         kml.append("    <coordinates>${log.lon},${log.lat},0</coordinates>\n")
         kml.append("  </Point>\n")
@@ -405,16 +482,19 @@ private fun exportKml(context: Context, logs: List<CellLog>) {
 }
 
 private fun exportGeoJson(context: Context, logs: List<CellLog>) {
-    if (logs.isEmpty()) return
+    if (logs.isEmpty()) {
+        Toast.makeText(context, "No logs to export", Toast.LENGTH_SHORT).show()
+        return
+    }
     val json = StringBuilder("{\n\"type\": \"FeatureCollection\",\n\"features\": [\n")
     logs.forEachIndexed { index, log ->
         json.append("  {\n")
         json.append("    \"type\": \"Feature\",\n")
         json.append("    \"properties\": {\n")
-        json.append("      \"tech\": \"${log.tech}\",\n")
-        json.append("      \"band\": \"${log.band}\",\n")
+        json.append("      \"tech\": \"${jsonEscape(log.tech)}\",\n")
+        json.append("      \"band\": \"${jsonEscape(log.band)}\",\n")
         json.append("      \"rsrp\": ${log.rsrp},\n")
-        json.append("      \"address\": \"${log.address}\"\n")
+        json.append("      \"address\": \"${jsonEscape(log.address)}\"\n")
         json.append("    },\n")
         json.append("    \"geometry\": {\n")
         json.append("      \"type\": \"Point\",\n")

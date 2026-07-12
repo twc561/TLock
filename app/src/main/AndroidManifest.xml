@@ -41,13 +41,14 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
-        <!-- App Widget Provider -->
+        <!-- App Widget Provider. The internal refresh action is deliberately NOT in the
+             intent filter: it's delivered via an explicit component intent, and keeping
+             it out of the filter stops other apps from matching it implicitly. -->
         <receiver
             android:name=".widget.TowerLockWidget"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.widget.UPDATE_STATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

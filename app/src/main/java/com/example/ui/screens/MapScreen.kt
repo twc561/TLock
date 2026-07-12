@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -10,6 +11,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,7 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,6 +32,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.TowerDbEntry
 import com.example.location.LocationTracker
 import com.example.telephony.CellModel
+import com.example.ui.theme.TlTheme
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -42,17 +45,8 @@ import org.osmdroid.views.overlay.Polyline
 import java.util.Locale
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.sp
-import androidx.compose.material.icons.filled.CellTower
-import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Layers
+import androidx.compose.ui.unit.sp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,6 +61,8 @@ fun MapScreen(
     allTowers: List<TowerDbEntry>,
     onSaveTower: (lat: Double, lon: Double, address: String) -> Unit
 ) {
+    val tl = TlTheme.colors
+    val isDarkTheme = isSystemInDarkTheme()
     val context = LocalContext.current
     var selectedTower by remember { mutableStateOf<TowerDbEntry?>(null) }
     var isBottomSheetOpen by remember { mutableStateOf(false) }
@@ -78,6 +74,12 @@ fun MapScreen(
     var isResolvingPendingAddress by remember { mutableStateOf(false) }
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+
+    // Accent colors for map overlays, resolved from the active theme.
+    val skyArgb = tl.sky.toArgb()
+    val emeraldArgb = tl.emerald.toArgb()
+    val pinkArgb = tl.pink.toArgb()
+    val pinkFillArgb = tl.pink.copy(alpha = 0.125f).toArgb()
 
     data class PlotTower(
         val radio: String,
@@ -163,7 +165,7 @@ fun MapScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
+            .background(tl.background)
     ) {
         AndroidView(
             factory = { ctx ->
@@ -171,16 +173,7 @@ fun MapScreen(
                     setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
-                    
-                    // Dark Mode styling via ColorMatrix
-                    val darkMatrix = floatArrayOf(
-                        -0.8f, 0f, 0f, 0f, 255f, // R
-                        0f, -0.8f, 0f, 0f, 255f, // G
-                        0f, 0f, -0.8f, 0f, 255f, // B
-                        0f, 0f, 0f, 1f, 0f        // A
-                    )
-                    overlayManager.tilesOverlay.setColorFilter(ColorMatrixColorFilter(darkMatrix))
-                    
+
                     // Default Zoom and position (SF or user location)
                     controller.setZoom(15.5)
                     val startPoint = if (userLat != null && userLon != null) {
@@ -194,6 +187,20 @@ fun MapScreen(
             },
             modifier = Modifier.fillMaxSize(),
             update = { mapView ->
+                // Invert map tiles only when the app renders in dark mode; light mode
+                // shows the standard OSM cartography.
+                if (isDarkTheme) {
+                    val darkMatrix = floatArrayOf(
+                        -0.8f, 0f, 0f, 0f, 255f, // R
+                        0f, -0.8f, 0f, 0f, 255f, // G
+                        0f, 0f, -0.8f, 0f, 255f, // B
+                        0f, 0f, 0f, 1f, 0f        // A
+                    )
+                    mapView.overlayManager.tilesOverlay.setColorFilter(ColorMatrixColorFilter(darkMatrix))
+                } else {
+                    mapView.overlayManager.tilesOverlay.setColorFilter(null)
+                }
+
                 mapView.overlays.clear()
 
                 // 0. Tap-to-place overlay for manually recording a tower location.
@@ -253,7 +260,7 @@ fun MapScreen(
                         val polyline = Polyline().apply {
                             addPoint(GeoPoint(userLat, userLon))
                             addPoint(towerPoint)
-                            outlinePaint.color = android.graphics.Color.parseColor("#38BDF8")
+                            outlinePaint.color = skyArgb
                             outlinePaint.strokeWidth = 4f
                             outlinePaint.strokeCap = Paint.Cap.ROUND
                             outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 10f), 0f)
@@ -267,7 +274,7 @@ fun MapScreen(
                         val polylineClosest = Polyline().apply {
                             addPoint(GeoPoint(userLat, userLon))
                             addPoint(closestPoint)
-                            outlinePaint.color = android.graphics.Color.parseColor("#10B981")
+                            outlinePaint.color = emeraldArgb
                             outlinePaint.strokeWidth = 5f
                             outlinePaint.strokeCap = Paint.Cap.ROUND
                             outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(15f, 15f), 0f)
@@ -285,8 +292,8 @@ fun MapScreen(
                         }
                         val taRing = Polygon().apply {
                             points = circlePoints
-                            fillPaint.color = android.graphics.Color.parseColor("#20EC4899") // Semi-transparent pink
-                            outlinePaint.color = android.graphics.Color.parseColor("#EC4899")
+                            fillPaint.color = pinkFillArgb
+                            outlinePaint.color = pinkArgb
                             outlinePaint.strokeWidth = 2f
                         }
                         mapView.overlays.add(taRing)
@@ -321,7 +328,7 @@ fun MapScreen(
                 .align(Alignment.TopCenter)
                 .padding(top = 16.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E293B).copy(alpha = 0.9f))
+                .background(tl.surface.copy(alpha = 0.9f))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Text(
@@ -330,7 +337,7 @@ fun MapScreen(
                     towerLat != null -> "Viewing serving & ${allTowers.size} logged towers"
                     else -> "Awaiting cell tower lock..."
                 },
-                color = Color.White,
+                color = tl.textPrimary,
                 style = MaterialTheme.typography.labelMedium
             )
         }
@@ -343,8 +350,8 @@ fun MapScreen(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = 205.dp, end = 16.dp),
-            containerColor = if (isPlacingTower) Color(0xFFEF4444) else Color(0xFF10B981),
-            contentColor = Color.White
+            containerColor = if (isPlacingTower) tl.red else tl.emerald,
+            contentColor = tl.onAccent
         ) {
             Icon(
                 imageVector = if (isPlacingTower) Icons.Default.Close else Icons.Default.AddLocation,
@@ -363,7 +370,7 @@ fun MapScreen(
             Text(
                 text = if (userLat != null && userLon != null) "NEAREST CELL CONNECTION POINTS" else "KNOWN CELLULAR TOWERS",
                 style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
-                color = Color(0xFF94A3B8),
+                color = tl.textSecondary,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(start = 20.dp, bottom = 8.dp)
             )
@@ -373,7 +380,7 @@ fun MapScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B).copy(alpha = 0.95f))
+                    colors = CardDefaults.cardColors(containerColor = tl.surface.copy(alpha = 0.95f))
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -382,14 +389,14 @@ fun MapScreen(
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = null,
-                            tint = Color(0xFF64748B),
+                            tint = tl.textMuted,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "No towers mapped yet. Tap a spot or discover cells to map.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFF94A3B8)
+                            color = tl.textSecondary
                         )
                     }
                 }
@@ -401,7 +408,7 @@ fun MapScreen(
                 ) {
                     items(plotTowers) { plotTower ->
                         val isClosest = closestTower != null && plotTower.cid == closestTower.cid && plotTower.mcc == closestTower.mcc && plotTower.mnc == closestTower.mnc
-                        
+
                         Card(
                             modifier = Modifier
                                 .width(280.dp)
@@ -425,9 +432,9 @@ fun MapScreen(
                                 },
                             colors = CardDefaults.cardColors(
                                 containerColor = when {
-                                    plotTower.isServing -> Color(0xFF1E3A8A).copy(alpha = 0.95f) // Deep Navy for connected serving tower
-                                    isClosest -> Color(0xFF064E3B).copy(alpha = 0.95f) // Forest Green for closest tower
-                                    else -> Color(0xFF1E293B).copy(alpha = 0.95f) // Slate Dark
+                                    plotTower.isServing -> tl.servingContainer.copy(alpha = 0.95f)
+                                    isClosest -> tl.nearestContainer.copy(alpha = 0.95f)
+                                    else -> tl.surface.copy(alpha = 0.95f)
                                 }
                             ),
                             elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
@@ -450,12 +457,12 @@ fun MapScreen(
                                         Text(
                                             text = "${plotTower.radio} Cell ${plotTower.cid}",
                                             style = MaterialTheme.typography.bodyMedium,
-                                            color = Color.White,
+                                            color = tl.textPrimary,
                                             fontWeight = FontWeight.Bold,
                                             maxLines = 1
                                         )
                                     }
-                                    
+
                                     // Distance representation
                                     if (plotTower.distance != null) {
                                         Text(
@@ -465,7 +472,7 @@ fun MapScreen(
                                                 String.format(Locale.US, "%.1f km", plotTower.distance / 1000f)
                                             },
                                             style = MaterialTheme.typography.labelMedium,
-                                            color = if (isClosest) Color(0xFF34D399) else Color(0xFF38BDF8),
+                                            color = if (isClosest) tl.emerald else tl.sky,
                                             fontWeight = FontWeight.ExtraBold,
                                             modifier = Modifier.padding(start = 6.dp)
                                         )
@@ -483,12 +490,12 @@ fun MapScreen(
                                         Text(
                                             text = "MCC-MNC: ${plotTower.mcc}-${plotTower.mnc}",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = Color(0xFF94A3B8)
+                                            color = tl.textSecondary
                                         )
                                         Text(
                                             text = plotTower.address ?: "Saved tower location",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = Color(0xFF64748B),
+                                            color = tl.textMuted,
                                             maxLines = 1
                                         )
                                     }
@@ -501,12 +508,12 @@ fun MapScreen(
                                             Box(
                                                 modifier = Modifier
                                                     .clip(RoundedCornerShape(4.dp))
-                                                    .background(Color(0xFF3B82F6))
+                                                    .background(tl.sky)
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
                                                 Text(
                                                     text = "SERVING",
-                                                    color = Color.White,
+                                                    color = tl.onAccent,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     fontWeight = FontWeight.Bold
                                                 )
@@ -516,12 +523,12 @@ fun MapScreen(
                                             Box(
                                                 modifier = Modifier
                                                     .clip(RoundedCornerShape(4.dp))
-                                                    .background(Color(0xFF10B981))
+                                                    .background(tl.emerald)
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
                                                 Text(
                                                     text = "NEAREST",
-                                                    color = Color.White,
+                                                    color = tl.onAccent,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     fontWeight = FontWeight.Bold
                                                 )
@@ -546,12 +553,16 @@ fun MapScreen(
 
             AlertDialog(
                 onDismissRequest = { pendingTowerPoint = null },
+                containerColor = tl.surface,
+                titleContentColor = tl.textPrimary,
+                textContentColor = tl.textSecondary,
                 title = { Text("Save Tower Location") },
                 text = {
                     Column {
                         Text(
                             text = String.format(Locale.US, "%.5f, %.5f", point.latitude, point.longitude),
-                            style = MaterialTheme.typography.bodyMedium
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = tl.textPrimary
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedTextField(
@@ -566,7 +577,7 @@ fun MapScreen(
                         Text(
                             text = "Saved for cell ${cell.cellId} (${cell.mcc ?: "310"}-${cell.mnc ?: "260"}), so it resolves instantly next time.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF94A3B8)
+                            color = tl.textSecondary
                         )
                     }
                 },
@@ -575,12 +586,12 @@ fun MapScreen(
                         onSaveTower(point.latitude, point.longitude, pendingAddressInput)
                         pendingTowerPoint = null
                     }) {
-                        Text("Save Tower")
+                        Text("Save Tower", color = tl.emerald)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { pendingTowerPoint = null }) {
-                        Text("Cancel")
+                        Text("Cancel", color = tl.textSecondary)
                     }
                 }
             )
@@ -590,8 +601,8 @@ fun MapScreen(
         if (isBottomSheetOpen && selectedTower != null) {
             ModalBottomSheet(
                 onDismissRequest = { isBottomSheetOpen = false },
-                containerColor = Color(0xFF1E293B),
-                dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF475569)) }
+                containerColor = tl.surface,
+                dragHandle = { BottomSheetDefaults.DragHandle(color = tl.outline) }
             ) {
                 Column(
                     modifier = Modifier
@@ -601,17 +612,17 @@ fun MapScreen(
                     Text(
                         text = "${selectedTower!!.radio} cell tower coordinates",
                         style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
+                        color = tl.textPrimary,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = selectedTower!!.address ?: "No geocoded address resolved",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = Color(0xFF94A3B8),
+                        color = tl.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                     )
 
-                    HorizontalDivider(color = Color(0xFF334155), modifier = Modifier.padding(bottom = 16.dp))
+                    HorizontalDivider(color = tl.surfaceVariant, modifier = Modifier.padding(bottom = 16.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -646,7 +657,10 @@ fun MapScreen(
                                 Toast.makeText(context, "Coordinates copied to clipboard!", Toast.LENGTH_SHORT).show()
                             },
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569))
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = tl.surfaceVariant,
+                                contentColor = tl.textPrimary
+                            )
                         ) {
                             Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy")
                             Spacer(modifier = Modifier.width(8.dp))
@@ -655,19 +669,29 @@ fun MapScreen(
 
                         Button(
                             onClick = {
-                                val uri = "google.navigation:q=${selectedTower!!.lat},${selectedTower!!.lon}"
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).apply {
-                                    setPackage("com.google.android.apps.maps")
-                                }
-                                if (intent.resolveActivity(context.packageManager) != null) {
+                                // Package visibility rules make resolveActivity unreliable on
+                                // API 30+; attempt Google Maps first, then any browser/maps app.
+                                val lat = selectedTower!!.lat
+                                val lon = selectedTower!!.lon
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=$lat,$lon")).apply {
+                                        setPackage("com.google.android.apps.maps")
+                                    }
                                     context.startActivity(intent)
-                                } else {
-                                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/search/?api=1&query=${selectedTower!!.lat},${selectedTower!!.lon}"))
-                                    context.startActivity(webIntent)
+                                } catch (e: ActivityNotFoundException) {
+                                    try {
+                                        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/search/?api=1&query=$lat,$lon"))
+                                        context.startActivity(webIntent)
+                                    } catch (e2: ActivityNotFoundException) {
+                                        Toast.makeText(context, "No app available to open navigation", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             },
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = tl.emerald,
+                                contentColor = tl.onAccent
+                            )
                         ) {
                             Icon(imageVector = Icons.Default.Navigation, contentDescription = "Navigate")
                             Spacer(modifier = Modifier.width(8.dp))
@@ -682,8 +706,9 @@ fun MapScreen(
 
 @Composable
 fun DetailItem(label: String, value: String) {
+    val tl = TlTheme.colors
     Column {
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, color = Color.White, fontWeight = FontWeight.Bold)
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = tl.textMuted)
+        Text(text = value, style = MaterialTheme.typography.bodyMedium, color = tl.textPrimary, fontWeight = FontWeight.Bold)
     }
 }

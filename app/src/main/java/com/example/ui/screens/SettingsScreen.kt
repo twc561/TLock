@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -17,17 +18,21 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.TlTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,6 +45,7 @@ fun SettingsScreen(
     onRestoreDb: () -> Unit,
     onImportCsv: (Uri) -> Unit
 ) {
+    val tl = TlTheme.colors
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("TowerLockPrefs", Context.MODE_PRIVATE) }
     val csvImportLauncher = rememberLauncherForActivityResult(
@@ -47,6 +53,7 @@ fun SettingsScreen(
     ) { uri -> uri?.let(onImportCsv) }
 
     var openCellIdKey by remember { mutableStateOf(prefs.getString("opencellid_key", "") ?: "") }
+    var isKeyVisible by remember { mutableStateOf(false) }
     var pollInterval by remember { mutableStateOf(prefs.getInt("poll_interval", 3)) }
     var gnbBits by remember { mutableStateOf(prefs.getInt("gnb_bits", 24)) }
     var selectedIconStyle by remember { mutableStateOf(prefs.getString("icon_style", "dBm") ?: "dBm") }
@@ -67,7 +74,7 @@ fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
+            .background(tl.background)
             .padding(16.dp)
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -75,14 +82,14 @@ fun SettingsScreen(
         Text(
             text = "Monitoring Settings",
             style = MaterialTheme.typography.titleMedium,
-            color = Color.White,
+            color = tl.textPrimary,
             fontWeight = FontWeight.Bold
         )
 
         // API Key Section
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+            colors = CardDefaults.cardColors(containerColor = tl.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -93,7 +100,7 @@ fun SettingsScreen(
                     Text(
                         text = "OpenCelliD Integration",
                         style = MaterialTheme.typography.titleSmall,
-                        color = Color.White,
+                        color = tl.textPrimary,
                         fontWeight = FontWeight.Bold
                     )
                     val isConfigured = openCellIdKey.isNotBlank()
@@ -101,14 +108,14 @@ fun SettingsScreen(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
                             .background(
-                                if (isConfigured) Color(0xFF10B981).copy(alpha = 0.18f)
-                                else Color(0xFFEF4444).copy(alpha = 0.18f)
+                                if (isConfigured) tl.emerald.copy(alpha = 0.18f)
+                                else tl.red.copy(alpha = 0.18f)
                             )
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = if (isConfigured) "CONFIGURED" else "NOT SET",
-                            color = if (isConfigured) Color(0xFF10B981) else Color(0xFFEF4444),
+                            color = if (isConfigured) tl.emerald else tl.red,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -118,7 +125,7 @@ fun SettingsScreen(
                     text = "Real-world cell towers resolve to an address only when this key is set — " +
                             "without it, almost every tower you connect to will show as \"Unmapped.\"",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF94A3B8)
+                    color = tl.textSecondary
                 )
                 TextField(
                     value = openCellIdKey,
@@ -130,19 +137,37 @@ fun SettingsScreen(
                     placeholder = { Text("Enter OpenCelliD API Key") },
                     modifier = Modifier.fillMaxWidth(),
                     colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color(0xFF0F172A),
-                        unfocusedContainerColor = Color(0xFF0F172A),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        focusedContainerColor = tl.background,
+                        unfocusedContainerColor = tl.background,
+                        focusedTextColor = tl.textPrimary,
+                        unfocusedTextColor = tl.textPrimary,
+                        focusedIndicatorColor = tl.emerald,
+                        unfocusedIndicatorColor = tl.outline,
+                        cursorColor = tl.emerald
                     ),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    // The key is a secret; mask it unless the user opts to reveal it.
+                    visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
+                            Icon(
+                                imageVector = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (isKeyVisible) "Hide API key" else "Show API key",
+                                tint = tl.textMuted
+                            )
+                        }
+                    }
                 )
                 Row(
                     modifier = Modifier
                         .clickable {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://my.opencellid.org/register"))
-                            context.startActivity(intent)
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://my.opencellid.org/register"))
+                                context.startActivity(intent)
+                            } catch (e: ActivityNotFoundException) {
+                                Toast.makeText(context, "No browser available to open the link", Toast.LENGTH_SHORT).show()
+                            }
                         }
                         .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -150,14 +175,14 @@ fun SettingsScreen(
                     Text(
                         text = "Get a free API key at opencellid.org",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF38BDF8),
+                        color = tl.sky,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.OpenInNew,
                         contentDescription = "Open OpenCelliD sign-up page",
-                        tint = Color(0xFF38BDF8),
+                        tint = tl.sky,
                         modifier = Modifier.size(14.dp)
                     )
                 }
@@ -167,13 +192,13 @@ fun SettingsScreen(
         // Config Params Section
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+            colors = CardDefaults.cardColors(containerColor = tl.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     text = "Hardware Resolution",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = tl.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
 
@@ -182,7 +207,7 @@ fun SettingsScreen(
                     Text(
                         text = "Polling Interval: $pollInterval seconds",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
+                        color = tl.textPrimary
                     )
                     Slider(
                         value = pollInterval.toFloat(),
@@ -193,25 +218,26 @@ fun SettingsScreen(
                         },
                         valueRange = 1f..10f,
                         colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFF10B981),
-                            activeTrackColor = Color(0xFF10B981)
+                            thumbColor = tl.emerald,
+                            activeTrackColor = tl.emerald,
+                            inactiveTrackColor = tl.surfaceVariant
                         )
                     )
                 }
 
-                Divider(color = Color(0xFF334155))
+                HorizontalDivider(color = tl.surfaceVariant)
 
                 // gNB Bits
                 Column {
                     Text(
                         text = "5G gNodeB Decode Mask: $gnbBits bits",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
+                        color = tl.textPrimary
                     )
                     Text(
                         text = "Standard US Carriers (T-Mobile/Verizon) typically use 24 bits. AT&T can fluctuate.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF94A3B8)
+                        color = tl.textSecondary
                     )
                     Slider(
                         value = gnbBits.toFloat(),
@@ -222,8 +248,9 @@ fun SettingsScreen(
                         },
                         valueRange = 20f..28f,
                         colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFF38BDF8),
-                            activeTrackColor = Color(0xFF38BDF8)
+                            thumbColor = tl.sky,
+                            activeTrackColor = tl.sky,
+                            inactiveTrackColor = tl.surfaceVariant
                         )
                     )
                 }
@@ -233,20 +260,20 @@ fun SettingsScreen(
         // Battery Optimization Section
         Card(
             modifier = Modifier.fillMaxWidth().testTag("battery_optimization_card"),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+            colors = CardDefaults.cardColors(containerColor = tl.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     text = "Power & Battery Optimization",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = tl.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
 
                 Text(
                     text = "Batch polling mode wakes up sensors periodically to take a burst of cell tower measurements, reducing continuous CPU and GPS battery drain.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF94A3B8)
+                    color = tl.textSecondary
                 )
 
                 Row(
@@ -257,7 +284,7 @@ fun SettingsScreen(
                     Text(
                         text = "Enable Polling Batching",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
+                        color = tl.textPrimary
                     )
                     Switch(
                         checked = batchingEnabled,
@@ -266,21 +293,21 @@ fun SettingsScreen(
                             prefs.edit().putBoolean("batching_enabled", it).apply()
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF10B981),
-                            checkedTrackColor = Color(0xFF065F46)
+                            checkedThumbColor = tl.onAccent,
+                            checkedTrackColor = tl.emerald
                         ),
                         modifier = Modifier.testTag("batching_enabled_switch")
                     )
                 }
 
                 if (batchingEnabled) {
-                    Divider(color = Color(0xFF334155))
+                    HorizontalDivider(color = tl.surfaceVariant)
 
                     Column {
                         Text(
                             text = "Batch Wake-up Interval: $batchInterval seconds",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White
+                            color = tl.textPrimary
                         )
                         Slider(
                             value = batchInterval.toFloat(),
@@ -290,8 +317,9 @@ fun SettingsScreen(
                             },
                             valueRange = 30f..300f,
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFF10B981),
-                                activeTrackColor = Color(0xFF10B981)
+                                thumbColor = tl.emerald,
+                                activeTrackColor = tl.emerald,
+                                inactiveTrackColor = tl.surfaceVariant
                             ),
                             modifier = Modifier.testTag("batch_interval_slider")
                         )
@@ -303,19 +331,19 @@ fun SettingsScreen(
         // Notification Icon Section
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+            colors = CardDefaults.cardColors(containerColor = tl.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = "Status-Bar Icon Style",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = tl.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = "Choose what is drawn in real-time onto the small foreground notification icon.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF94A3B8)
+                    color = tl.textSecondary
                 )
 
                 val styles = listOf("dBm", "band", "tech")
@@ -324,6 +352,7 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     styles.forEach { style ->
+                        val selected = selectedIconStyle == style
                         Button(
                             onClick = {
                                 selectedIconStyle = style
@@ -332,11 +361,12 @@ fun SettingsScreen(
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (selectedIconStyle == style) Color(0xFF10B981) else Color(0xFF0F172A)
+                                containerColor = if (selected) tl.emerald else tl.surfaceVariant,
+                                contentColor = if (selected) tl.onAccent else tl.textPrimary
                             ),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text(style.uppercase(), color = Color.White, fontSize = 12.sp)
+                            Text(style.uppercase(), fontSize = 12.sp)
                         }
                     }
                 }
@@ -346,13 +376,13 @@ fun SettingsScreen(
         // Alerts Rules Engine
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+            colors = CardDefaults.cardColors(containerColor = tl.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = "Notification Alert Rules",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = tl.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
 
@@ -418,13 +448,13 @@ fun SettingsScreen(
         // Database Backup & Restore
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+            colors = CardDefaults.cardColors(containerColor = tl.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     text = "Data Management",
                     style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
+                    color = tl.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
 
@@ -435,7 +465,10 @@ fun SettingsScreen(
                     Button(
                         onClick = onBackupDb,
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = tl.surfaceVariant,
+                            contentColor = tl.textPrimary
+                        ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Icon(imageVector = Icons.Default.Save, contentDescription = "Backup")
@@ -446,7 +479,10 @@ fun SettingsScreen(
                     Button(
                         onClick = onRestoreDb,
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = tl.outline,
+                            contentColor = tl.textPrimary
+                        ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Icon(imageVector = Icons.Default.Restore, contentDescription = "Restore")
@@ -455,25 +491,28 @@ fun SettingsScreen(
                     }
                 }
 
-                Divider(color = Color(0xFF334155))
+                HorizontalDivider(color = tl.surfaceVariant)
 
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = "Bulk Tower Import",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
+                        color = tl.textPrimary
                     )
                     Text(
                         text = "Import a CSV of known towers (radio, mcc, mnc, area, cid, lat, lon, range, address) " +
                                 "so they resolve locally without needing an API lookup.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF94A3B8)
+                        color = tl.textSecondary
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Button(
                         onClick = { csvImportLauncher.launch("*/*") },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = tl.emerald,
+                            contentColor = tl.onAccent
+                        ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Icon(imageVector = Icons.Default.FileUpload, contentDescription = "Import CSV")
@@ -493,19 +532,20 @@ fun AlertSwitchRow(
     testTag: String? = null,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val tl = TlTheme.colors
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+        Text(text = label, color = tl.textPrimary, style = MaterialTheme.typography.bodyMedium)
         Switch(
             checked = state,
             onCheckedChange = onCheckedChange,
             modifier = if (testTag != null) Modifier.testTag(testTag) else Modifier,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color(0xFF10B981),
-                checkedTrackColor = Color(0xFF10B981).copy(alpha = 0.5f)
+                checkedThumbColor = tl.onAccent,
+                checkedTrackColor = tl.emerald
             )
         )
     }

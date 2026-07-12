@@ -6,12 +6,14 @@ import com.example.location.LocationTracker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 
 class CellRepository(
     private val cellDao: CellDao,
@@ -20,7 +22,13 @@ class CellRepository(
     val allLogs: Flow<List<CellLog>> = cellDao.getAllLogs()
     val allTowers: Flow<List<TowerDbEntry>> = cellDao.getAllTowers()
 
-    private val okHttpClient = OkHttpClient()
+    // Bounded timeouts so a stalled OpenCelliD response can never wedge the
+    // monitoring loop that calls findTowerLocation on every poll.
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .build()
 
     suspend fun insertLog(log: CellLog) = withContext(Dispatchers.IO) {
         cellDao.insertLog(log)
@@ -75,8 +83,19 @@ class CellRepository(
         // 2. Search OpenCelliD API if key is available
         if (!openCellIdApiKey.isNullOrBlank()) {
             try {
-                // OpenCelliD API uses LAC for area, cellid for cid
-                val url = "https://opencellid.org/cell/get?key=$openCellIdApiKey&mcc=$mcc&mnc=$mnc&lac=$area&cellid=$cid&format=json"
+                // OpenCelliD API uses LAC for area, cellid for cid. Built with
+                // HttpUrl so the user-supplied key is always query-encoded.
+                val url = HttpUrl.Builder()
+                    .scheme("https")
+                    .host("opencellid.org")
+                    .addPathSegments("cell/get")
+                    .addQueryParameter("key", openCellIdApiKey)
+                    .addQueryParameter("mcc", mcc)
+                    .addQueryParameter("mnc", mnc)
+                    .addQueryParameter("lac", area.toString())
+                    .addQueryParameter("cellid", cid.toString())
+                    .addQueryParameter("format", "json")
+                    .build()
                 val request = Request.Builder().url(url).build()
                 okHttpClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
@@ -87,6 +106,10 @@ class CellRepository(
                                 val lat = json.getDouble("lat")
                                 val lon = json.getDouble("lon")
                                 val range = json.optInt("range", 1000)
+                                if (lat !in -90.0..90.0 || lon !in -180.0..180.0) {
+                                    Log.w("CellRepository", "Discarding OpenCelliD result with invalid coordinates: $lat, $lon")
+                                    return@use
+                                }
                                 val address = LocationTracker.reverseGeocode(context, lat, lon)
 
                                 // Cache it in our local database, address included, so we
@@ -146,8 +169,37 @@ class CellRepository(
         val addressIdx: Int = 8
     )
 
+    /**
+     * Splits a CSV line honoring double-quoted fields (RFC 4180), so addresses
+     * containing commas don't shift every following column.
+     */
+    private fun splitCsvLine(line: String): List<String> {
+        val fields = mutableListOf<String>()
+        val current = StringBuilder()
+        var inQuotes = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c == '"' && inQuotes && i + 1 < line.length && line[i + 1] == '"' -> {
+                    current.append('"')
+                    i++
+                }
+                c == '"' -> inQuotes = !inQuotes
+                c == ',' && !inQuotes -> {
+                    fields.add(current.toString())
+                    current.setLength(0)
+                }
+                else -> current.append(c)
+            }
+            i++
+        }
+        fields.add(current.toString())
+        return fields
+    }
+
     private fun detectMapping(firstLine: String, isHeader: Boolean): CsvMapping {
-        val parts = firstLine.split(",")
+        val parts = splitCsvLine(firstLine)
         if (isHeader) {
             var radioIdx = 0
             var mccIdx = 1
@@ -243,22 +295,25 @@ class CellRepository(
     }
 
     private fun parseCsvLine(line: String, mapping: CsvMapping): TowerDbEntry? {
-        val parts = line.split(",")
+        val parts = splitCsvLine(line)
         return try {
-            val radio = parts.getOrNull(mapping.radioIdx)?.trim() ?: return null
-            val mcc = parts.getOrNull(mapping.mccIdx)?.trim() ?: return null
-            val mnc = parts.getOrNull(mapping.mncIdx)?.trim() ?: return null
+            val radio = parts.getOrNull(mapping.radioIdx)?.trim()?.takeIf { it.isNotBlank() } ?: return null
+            val mcc = parts.getOrNull(mapping.mccIdx)?.trim()?.takeIf { it.isNotBlank() } ?: return null
+            val mnc = parts.getOrNull(mapping.mncIdx)?.trim()?.takeIf { it.isNotBlank() } ?: return null
             val area = parts.getOrNull(mapping.areaIdx)?.trim()?.toIntOrNull() ?: return null
             val cid = parts.getOrNull(mapping.cidIdx)?.trim()?.toLongOrNull() ?: return null
             val lat = parts.getOrNull(mapping.latIdx)?.trim()?.toDoubleOrNull() ?: return null
             val lon = parts.getOrNull(mapping.lonIdx)?.trim()?.toDoubleOrNull() ?: return null
+            // Reject rows whose coordinates can't be real; a single bad row
+            // shouldn't plant a phantom tower on the map.
+            if (lat !in -90.0..90.0 || lon !in -180.0..180.0) return null
             val range = if (mapping.rangeIdx >= 0) {
-                parts.getOrNull(mapping.rangeIdx)?.trim()?.toIntOrNull() ?: 1000
+                parts.getOrNull(mapping.rangeIdx)?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 1000
             } else {
                 1000
             }
             val address = if (mapping.addressIdx >= 0) {
-                parts.getOrNull(mapping.addressIdx)?.trim()?.replace("\"", "")
+                parts.getOrNull(mapping.addressIdx)?.trim()?.takeIf { it.isNotBlank() }
             } else {
                 null
             }

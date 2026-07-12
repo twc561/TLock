@@ -1,37 +1,35 @@
 package com.example.ui.screens
 
-import android.content.Context
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.telephony.CellModel
 import com.example.location.LocationTracker
+import com.example.ui.theme.TlTheme
+import com.example.ui.theme.signalColorForGrade
+import com.example.ui.theme.signalColorForRsrp
 import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.sin
@@ -50,6 +48,7 @@ fun DashboardScreen(
     rsrpHistory: List<Int>,
     onSnapshotClick: () -> Unit
 ) {
+    val tl = TlTheme.colors
     var activeMetricInfo by remember { mutableStateOf<MetricInfo?>(null) }
 
     val distance = if (userLat != null && userLon != null && towerLat != null && towerLon != null) {
@@ -64,13 +63,13 @@ fun DashboardScreen(
         0f
     }
 
-    val isSuspect = distance != null && cell.distanceEstimateMeters > 0 && 
+    val isSuspect = distance != null && cell.distanceEstimateMeters > 0 &&
             (distance > cell.distanceEstimateMeters * 2 || cell.distanceEstimateMeters > distance * 2)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A)) // Cosmic Slate dark background
+            .background(tl.background)
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -84,7 +83,7 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 12.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+            colors = CardDefaults.cardColors(containerColor = tl.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
         ) {
             Column(
@@ -104,25 +103,25 @@ fun DashboardScreen(
                         Text(
                             text = cell.operatorName ?: "Carrier",
                             style = MaterialTheme.typography.titleMedium,
-                            color = Color.White,
+                            color = tl.textPrimary,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = "Serving Cell Identity",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF94A3B8)
+                            color = tl.textSecondary
                         )
                     }
                     // Technology Badge
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(cell.signalGradeColorHex))
+                            .background(signalColorForGrade(cell.signalGrade))
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Text(
                             text = cell.tech,
-                            color = Color.White,
+                            color = tl.onAccent,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold
                         )
@@ -135,7 +134,7 @@ fun DashboardScreen(
                 Text(
                     text = if (towerLat != null) resolvedAddress else "Locating Serving Tower...",
                     style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White,
+                    color = tl.textPrimary,
                     fontWeight = FontWeight.Bold,
                     lineHeight = 28.sp
                 )
@@ -147,14 +146,14 @@ fun DashboardScreen(
                     Icon(
                         imageVector = Icons.Default.LocationOn,
                         contentDescription = "Accuracy",
-                        tint = Color(0xFF38BDF8),
+                        tint = tl.sky,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = if (towerLat != null) "Confidence: ±$confidenceMeters m" else "Calculating triangulation metrics",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF38BDF8)
+                        color = tl.sky
                     )
                 }
 
@@ -164,21 +163,21 @@ fun DashboardScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFFEF4444).copy(alpha = 0.15f))
+                            .background(tl.red.copy(alpha = 0.15f))
                             .padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = "Suspect Position",
-                            tint = Color(0xFFEF4444),
+                            tint = tl.red,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Position suspect: TA distance mismatch (>2x)",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFEF4444),
+                            color = tl.red,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -200,7 +199,7 @@ fun DashboardScreen(
                     title = "RSRP",
                     value = "${cell.rsrp} dBm",
                     sub = "Ref. Signal Rx Power",
-                    color = Color(cell.signalGradeColorHex),
+                    color = signalColorForGrade(cell.signalGrade),
                     icon = Icons.Default.SignalCellularAlt,
                     onClick = {
                         activeMetricInfo = MetricInfo(
@@ -219,7 +218,7 @@ fun DashboardScreen(
                     title = "SINR",
                     value = "${cell.sinr} dB",
                     sub = "Signal-to-Interference-Noise",
-                    color = Color(0xFF38BDF8),
+                    color = tl.sky,
                     icon = Icons.Default.NetworkWifi,
                     onClick = {
                         activeMetricInfo = MetricInfo(
@@ -238,7 +237,7 @@ fun DashboardScreen(
                     title = "Band",
                     value = cell.bandName.substringBefore(" ("),
                     sub = cell.bandName.substringAfter("(").replace(")", ""),
-                    color = Color(0xFFF59E0B),
+                    color = tl.amber,
                     icon = Icons.Default.SettingsInputAntenna,
                     onClick = {
                         activeMetricInfo = MetricInfo(
@@ -253,7 +252,7 @@ fun DashboardScreen(
                     title = "Distance",
                     value = if (distance != null) String.format(Locale.US, "%.0f m", distance) else "--- m",
                     sub = "TA Ring: ${String.format(Locale.US, "%.0f m", cell.distanceEstimateMeters)}",
-                    color = Color(0xFFEC4899),
+                    color = tl.pink,
                     icon = Icons.Default.DirectionsRun,
                     onClick = {
                         activeMetricInfo = MetricInfo(
@@ -266,10 +265,10 @@ fun DashboardScreen(
             }
 
             // Carrier Aggregation Card
-            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+            item(span = { GridItemSpan(2) }) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                    colors = CardDefaults.cardColors(containerColor = tl.surface),
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -283,14 +282,14 @@ fun DashboardScreen(
                                 Icon(
                                     imageVector = Icons.Default.Layers,
                                     contentDescription = null,
-                                    tint = Color(0xFF10B981),
+                                    tint = tl.emerald,
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Carrier Aggregation (CA)",
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = Color.White,
+                                    color = tl.textPrimary,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -299,14 +298,14 @@ fun DashboardScreen(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(
-                                        if (caActive) Color(0xFF10B981).copy(alpha = 0.2f)
-                                        else Color(0xFF64748B).copy(alpha = 0.2f)
+                                        if (caActive) tl.emerald.copy(alpha = 0.2f)
+                                        else tl.textMuted.copy(alpha = 0.2f)
                                     )
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text(
                                     text = if (caActive) "${cell.activeCarriers.size}CC ACTIVE" else "STANDBY",
-                                    color = if (caActive) Color(0xFF10B981) else Color(0xFF94A3B8),
+                                    color = if (caActive) tl.emerald else tl.textSecondary,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -319,7 +318,7 @@ fun DashboardScreen(
                             text = if (caActive) "Aggregating multiple frequency channels to increase bandwidth."
                             else "Single carrier link. Secondary component carriers inactive or standby.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF94A3B8)
+                            color = tl.textSecondary
                         )
 
                         Spacer(modifier = Modifier.height(14.dp))
@@ -337,15 +336,15 @@ fun DashboardScreen(
                                         .width(48.dp)
                                         .clip(RoundedCornerShape(4.dp))
                                         .background(
-                                            if (carrier.type == "PCC") Color(0xFF10B981).copy(alpha = 0.15f)
-                                            else Color(0xFF38BDF8).copy(alpha = 0.15f)
+                                            if (carrier.type == "PCC") tl.emerald.copy(alpha = 0.15f)
+                                            else tl.sky.copy(alpha = 0.15f)
                                         )
                                         .padding(vertical = 4.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = carrier.type,
-                                        color = if (carrier.type == "PCC") Color(0xFF10B981) else Color(0xFF38BDF8),
+                                        color = if (carrier.type == "PCC") tl.emerald else tl.sky,
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -358,13 +357,13 @@ fun DashboardScreen(
                                     Text(
                                         text = carrier.band,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = Color.White,
+                                        color = tl.textPrimary,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                     Text(
                                         text = "ARFCN: ${carrier.arfcn}",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF64748B)
+                                        color = tl.textMuted
                                     )
                                 }
 
@@ -378,12 +377,12 @@ fun DashboardScreen(
                                     Text(
                                         text = "${carrier.rsrp} dBm",
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = getSignalStrengthColor(carrier.rsrp),
+                                        color = signalColorForRsrp(carrier.rsrp),
                                         fontWeight = FontWeight.Bold
                                     )
-                                    
+
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    
+
                                     // Visual signal bar for this carrier
                                     val percent = ((carrier.rsrp + 140f) / 90f).coerceIn(0f, 1f)
                                     Box(
@@ -391,14 +390,14 @@ fun DashboardScreen(
                                             .fillMaxWidth()
                                             .height(4.dp)
                                             .clip(CircleShape)
-                                            .background(Color(0xFF334155))
+                                            .background(tl.surfaceVariant)
                                     ) {
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxHeight()
                                                 .fillMaxWidth(percent)
                                                 .clip(CircleShape)
-                                                .background(getSignalStrengthColor(carrier.rsrp))
+                                                .background(signalColorForRsrp(carrier.rsrp))
                                         )
                                     }
                                 }
@@ -407,7 +406,7 @@ fun DashboardScreen(
                             if (index < cell.activeCarriers.size - 1) {
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 8.dp),
-                                    color = Color(0xFF334155),
+                                    color = tl.surfaceVariant,
                                     thickness = 1.dp
                                 )
                             }
@@ -417,12 +416,12 @@ fun DashboardScreen(
             }
 
             // Connection Sparkline
-            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+            item(span = { GridItemSpan(2) }) {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(110.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+                    colors = CardDefaults.cardColors(containerColor = tl.surface)
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Row(
@@ -432,13 +431,13 @@ fun DashboardScreen(
                             Text(
                                 text = "Signal History (RSRP)",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = Color.White,
+                                color = tl.textPrimary,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = "Last 30m",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF94A3B8)
+                                color = tl.textSecondary
                             )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -448,10 +447,10 @@ fun DashboardScreen(
             }
 
             // Live Compass Card
-            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+            item(span = { GridItemSpan(2) }) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
+                    colors = CardDefaults.cardColors(containerColor = tl.surface)
                 ) {
                     Row(
                         modifier = Modifier
@@ -464,34 +463,34 @@ fun DashboardScreen(
                             Text(
                                 text = "Cell Tower Compass",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
+                                color = tl.textPrimary,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = "Pointing to estimated tower coordinate",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF94A3B8)
+                                color = tl.textSecondary
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "Bearing: ${String.format(Locale.US, "%.1f°", bearing)}",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = Color(0xFF38BDF8),
+                                color = tl.sky,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = if (distance != null) String.format(Locale.US, "Range: %.1f km away", distance / 1000f) else "Calculating bearing...",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White
+                                color = tl.textPrimary
                             )
                         }
-                        
+
                         // Compass Icon Graphic
                         Box(
                             modifier = Modifier
                                 .size(90.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF0F172A)),
+                                .background(tl.background),
                             contentAlignment = Alignment.Center
                         ) {
                             CompassGraphic(bearing = bearing, deviceHeading = deviceHeading)
@@ -507,7 +506,10 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = tl.emerald,
+                contentColor = tl.onAccent
+            ),
             shape = RoundedCornerShape(10.dp)
         ) {
             Icon(imageVector = Icons.Default.Camera, contentDescription = "Snapshot")
@@ -520,9 +522,12 @@ fun DashboardScreen(
     if (activeMetricInfo != null) {
         AlertDialog(
             onDismissRequest = { activeMetricInfo = null },
+            containerColor = tl.surface,
+            titleContentColor = tl.textPrimary,
+            textContentColor = tl.textSecondary,
             confirmButton = {
                 TextButton(onClick = { activeMetricInfo = null }) {
-                    Text("Got It")
+                    Text("Got It", color = tl.emerald)
                 }
             },
             title = { Text(text = activeMetricInfo!!.title) },
@@ -540,11 +545,12 @@ fun MetricCard(
     icon: ImageVector,
     onClick: () -> Unit
 ) {
+    val tl = TlTheme.colors
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+        colors = CardDefaults.cardColors(containerColor = tl.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -556,7 +562,7 @@ fun MetricCard(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.labelLarge,
-                    color = Color(0xFF94A3B8),
+                    color = tl.textSecondary,
                     fontWeight = FontWeight.Bold
                 )
                 Icon(
@@ -577,7 +583,7 @@ fun MetricCard(
             Text(
                 text = sub,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF64748B),
+                color = tl.textMuted,
                 maxLines = 1
             )
         }
@@ -586,6 +592,7 @@ fun MetricCard(
 
 @Composable
 fun RsfphistorySparkline(history: List<Int>) {
+    val lineColor = TlTheme.colors.emerald
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
@@ -614,7 +621,7 @@ fun RsfphistorySparkline(history: List<Int>) {
         // Draw line
         drawPath(
             path = path,
-            color = Color(0xFF10B981),
+            color = lineColor,
             style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
         )
 
@@ -629,7 +636,7 @@ fun RsfphistorySparkline(history: List<Int>) {
             path = fillPath,
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    Color(0xFF10B981).copy(alpha = 0.3f),
+                    lineColor.copy(alpha = 0.3f),
                     Color.Transparent
                 )
             )
@@ -639,20 +646,23 @@ fun RsfphistorySparkline(history: List<Int>) {
 
 @Composable
 fun CompassGraphic(bearing: Float, deviceHeading: Float) {
+    val ringColor = TlTheme.colors.surfaceVariant
+    val cardinalColor = TlTheme.colors.textPrimary.toArgb()
+    val arrowColor = TlTheme.colors.sky
     Canvas(modifier = Modifier.fillMaxSize()) {
         val radius = size.minDimension / 2f
         val center = Offset(size.width / 2f, size.height / 2f)
 
         // Outer Ring
         drawCircle(
-            color = Color(0xFF334155),
+            color = ringColor,
             radius = radius - 4.dp.toPx(),
             style = Stroke(width = 2.dp.toPx())
         )
 
         // Cardinal Letters (North oriented relative to device)
         val textPaint = Paint().asFrameworkPaint().apply {
-            color = android.graphics.Color.WHITE
+            color = cardinalColor
             textSize = 10.dp.toPx()
             textAlign = android.graphics.Paint.Align.CENTER
             typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -690,7 +700,7 @@ fun CompassGraphic(bearing: Float, deviceHeading: Float) {
 
         // Draw connecting line to tower
         drawLine(
-            color = Color(0xFF38BDF8),
+            color = arrowColor,
             start = center,
             end = arrowTip,
             strokeWidth = 3.dp.toPx()
@@ -705,13 +715,14 @@ fun CompassGraphic(bearing: Float, deviceHeading: Float) {
 
         drawPath(
             path = arrowPath,
-            color = Color(0xFF38BDF8)
+            color = arrowColor
         )
     }
 }
 
 @Composable
 fun AcquiringSignalState() {
+    val tl = TlTheme.colors
     val infiniteTransition = rememberInfiniteTransition(label = "acquiringSignal")
     val pulseAlpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
@@ -731,21 +742,21 @@ fun AcquiringSignalState() {
         Icon(
             imageVector = Icons.Default.SignalCellularAlt,
             contentDescription = null,
-            tint = Color(0xFF10B981).copy(alpha = pulseAlpha),
+            tint = tl.emerald.copy(alpha = pulseAlpha),
             modifier = Modifier.size(64.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = "Acquiring Signal...",
             style = MaterialTheme.typography.titleMedium,
-            color = Color.White,
+            color = tl.textPrimary,
             fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "Waiting for the device to report a serving cell tower.",
             style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF94A3B8),
+            color = tl.textSecondary,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 32.dp)
         )
@@ -754,24 +765,17 @@ fun AcquiringSignalState() {
 
 data class MetricInfo(val title: String, val desc: String)
 
-fun getSignalStrengthColor(rsrp: Int): Color {
-    return when {
-        rsrp >= -80 -> Color(0xFF4CAF50)  // Excellent - Green
-        rsrp >= -95 -> Color(0xFF8BC34A)  // Good - Light Green
-        rsrp >= -110 -> Color(0xFFFFB74D) // Fair - Orange
-        else -> Color(0xFFE57373)         // Poor - Red
-    }
-}
-
 @Composable
 fun ProviderLogo(operatorName: String?, modifier: Modifier = Modifier) {
     val name = operatorName?.lowercase(Locale.ROOT) ?: "unknown"
     Box(
         modifier = modifier
             .clip(CircleShape)
-            .background(Color(0xFF1E293B)),
+            .background(TlTheme.colors.surfaceVariant),
         contentAlignment = Alignment.Center
     ) {
+        // Brand marks below intentionally keep their real-world carrier colors in
+        // both light and dark themes; only the fallback chip follows the theme.
         when {
             name.contains("t-mobile") || name.contains("t-mob") || name.contains("telekom") || name.contains("magenta") -> {
                 // T-Mobile Logo: Elegant Magenta Circle with bold white 'T' flanked by dots
@@ -818,11 +822,11 @@ fun ProviderLogo(operatorName: String?, modifier: Modifier = Modifier) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val r = size.minDimension / 2f
                     drawCircle(color = Color(0xFF00A6FF)) // AT&T Blue
-                    
+
                     // Draw 3D globe latitude stripes
                     val stripeColor = Color.White.copy(alpha = 0.85f)
                     val strokeW = 2.dp.toPx()
-                    
+
                     drawArc(
                         color = stripeColor,
                         startAngle = 180f,
@@ -832,7 +836,7 @@ fun ProviderLogo(operatorName: String?, modifier: Modifier = Modifier) {
                         size = size * 0.8f,
                         style = Stroke(width = strokeW)
                     )
-                    
+
                     drawArc(
                         color = stripeColor,
                         startAngle = 0f,
@@ -842,7 +846,7 @@ fun ProviderLogo(operatorName: String?, modifier: Modifier = Modifier) {
                         size = size * 0.8f,
                         style = Stroke(width = strokeW)
                     )
-                    
+
                     drawLine(
                         color = stripeColor,
                         start = Offset(r * 0.1f, r),
@@ -855,7 +859,7 @@ fun ProviderLogo(operatorName: String?, modifier: Modifier = Modifier) {
                 // Vodafone Logo: Red Circle with White Speechmark
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     drawCircle(color = Color(0xFFE60000)) // Vodafone Red
-                    
+
                     // Draw speechmark icon
                     val r = size.minDimension / 2f
                     drawCircle(
