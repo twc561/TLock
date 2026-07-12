@@ -59,6 +59,9 @@ fun MapScreen(
     towerAddress: String,
     confidenceMeters: Int,
     allTowers: List<TowerDbEntry>,
+    focusLat: Double? = null,
+    focusLon: Double? = null,
+    onFocusConsumed: () -> Unit = {},
     onSaveTower: (lat: Double, lon: Double, address: String) -> Unit
 ) {
     val tl = TlTheme.colors
@@ -160,6 +163,17 @@ fun MapScreen(
 
     LaunchedEffect(Unit) {
         Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+    }
+
+    // Deep-link focus (e.g. tapping a 5G-drop alert): center the map on the point
+    // once the MapView exists, then consume the request so it doesn't replay.
+    LaunchedEffect(focusLat, focusLon, mapViewRef) {
+        val map = mapViewRef
+        if (focusLat != null && focusLon != null && map != null) {
+            map.controller.setZoom(16.0)
+            map.controller.animateTo(GeoPoint(focusLat, focusLon))
+            onFocusConsumed()
+        }
     }
 
     Box(

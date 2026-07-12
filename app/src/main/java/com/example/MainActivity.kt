@@ -62,9 +62,39 @@ import java.io.FileOutputStream
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /** Deep-link extras used by notification PendingIntents. */
+        const val EXTRA_OPEN_TAB = "com.example.OPEN_TAB"
+        const val EXTRA_FOCUS_LAT = "com.example.FOCUS_LAT"
+        const val EXTRA_FOCUS_LON = "com.example.FOCUS_LON"
+    }
+
     private var monitoringService: TowerMonitoringService? = null
     private var isBound = false
     private val serviceJobs = mutableListOf<Job>()
+
+    // Deep-link requests (tab to open, map point to center) consumed by the UI.
+    private val requestedTabState = mutableStateOf<Int?>(null)
+    private val requestedFocusState = mutableStateOf<Pair<Double, Double>?>(null)
+
+    private fun handleDeepLinkIntent(intent: Intent?) {
+        intent ?: return
+        val tab = intent.getIntExtra(EXTRA_OPEN_TAB, -1)
+        if (tab in 0..3) requestedTabState.value = tab
+        if (intent.hasExtra(EXTRA_FOCUS_LAT) && intent.hasExtra(EXTRA_FOCUS_LON)) {
+            requestedFocusState.value =
+                intent.getDoubleExtra(EXTRA_FOCUS_LAT, 0.0) to intent.getDoubleExtra(EXTRA_FOCUS_LON, 0.0)
+        }
+        // Strip the extras so a configuration change doesn't replay the deep link.
+        intent.removeExtra(EXTRA_OPEN_TAB)
+        intent.removeExtra(EXTRA_FOCUS_LAT)
+        intent.removeExtra(EXTRA_FOCUS_LON)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleDeepLinkIntent(intent)
+    }
 
     private fun cancelServiceJobs() {
         serviceJobs.forEach { it.cancel() }
@@ -129,6 +159,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleDeepLinkIntent(intent)
 
         val db = AppDatabase.getDatabase(this, lifecycleScope)
         val repository = CellRepository(db.cellDao(), this)
@@ -144,6 +175,10 @@ class MainActivity : ComponentActivity() {
                     resolvedAddress = resolvedAddressState.value,
                     confidenceRange = confidenceRangeState.value,
                     deviceHeading = deviceHeadingState.value,
+                    requestedTab = requestedTabState.value,
+                    onRequestedTabConsumed = { requestedTabState.value = null },
+                    focusPoint = requestedFocusState.value,
+                    onFocusConsumed = { requestedFocusState.value = null },
                     onStartService = { startAndBindService() },
                     onStopService = { stopAndUnbindService() },
                     onBackupDb = { backupDatabase() },
@@ -292,6 +327,10 @@ fun MainAppScreen(
     resolvedAddress: String,
     confidenceRange: Int,
     deviceHeading: Float,
+    requestedTab: Int? = null,
+    onRequestedTabConsumed: () -> Unit = {},
+    focusPoint: Pair<Double, Double>? = null,
+    onFocusConsumed: () -> Unit = {},
     onStartService: () -> Unit,
     onStopService: () -> Unit,
     onBackupDb: () -> Unit,
@@ -300,10 +339,20 @@ fun MainAppScreen(
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
     var hasPermissions by remember { mutableStateOf(hasAllRequiredPermissions(context)) }
-    var isMonitoringActive by remember { mutableStateOf(hasPermissions) }
+    // The LIVE indicator reflects the service's actual state, so stopping from the
+    // notification (or the system killing the service) stays in sync with the UI.
+    val isMonitoringActive by TowerMonitoringService.isRunning.collectAsState()
 
     val logs by repository.allLogs.collectAsState(initial = emptyList())
     val towers by repository.allTowers.collectAsState(initial = emptyList())
+
+    // Notification deep links: switch to the requested tab once per request.
+    LaunchedEffect(requestedTab) {
+        if (requestedTab != null) {
+            selectedTab = requestedTab
+            onRequestedTabConsumed()
+        }
+    }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -315,7 +364,6 @@ fun MainAppScreen(
         ).all { perms[it] == true || ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
         hasPermissions = requiredGranted
         if (requiredGranted) {
-            isMonitoringActive = true
             onStartService()
         } else {
             Toast.makeText(context, "Location & phone permissions are required for monitoring", Toast.LENGTH_LONG).show()
@@ -334,7 +382,6 @@ fun MainAppScreen(
                         } else {
                             onStartService()
                         }
-                        isMonitoringActive = !isMonitoringActive
                     }
                 )
             }
@@ -432,6 +479,9 @@ fun MainAppScreen(
                             towerAddress = resolvedAddress,
                             confidenceMeters = confidenceRange,
                             allTowers = towers,
+                            focusLat = focusPoint?.first,
+                            focusLon = focusPoint?.second,
+                            onFocusConsumed = onFocusConsumed,
                             onSaveTower = { lat, lon, address ->
                                 coroutineScope.launch {
                                     repository.insertCustomTower(

@@ -110,5 +110,16 @@ class TowerLockWidget : AppWidgetProvider() {
             }
             context.sendBroadcast(intent)
         }
+
+        /** Drops the cached state so the widget renders OFFLINE (monitoring stopped). */
+        fun clearWidgetState(context: Context) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .clear()
+                .apply()
+            val intent = Intent(context, TowerLockWidget::class.java).apply {
+                action = ACTION_REFRESH
+            }
+            context.sendBroadcast(intent)
+        }
     }
 }

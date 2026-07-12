@@ -11,14 +11,14 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
-import android.graphics.drawable.Icon
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.view.View
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import androidx.core.text.HtmlCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.data.AppDatabase
@@ -61,9 +61,19 @@ class TowerMonitoringService : Service() {
     private var iconStyle = "dBm" // "dBm", "band", "tech", "bars"
     private var alertRsearchBelow = -110 // Alert threshold for RSRP
     private var isLoggingPaused = false
+    private var monitoringStartedAt = System.currentTimeMillis()
     // Monotonic ids keep alert notifications distinct without the collision risk
     // of truncating System.currentTimeMillis() to Int.
     private val alertNotificationId = java.util.concurrent.atomic.AtomicInteger(2000)
+
+    companion object {
+        private const val ALERT_GROUP = "com.example.TOWERLOCK_ALERTS"
+        private const val ALERT_SUMMARY_ID = 1999
+
+        private val _isRunning = MutableStateFlow(false)
+        /** True while the service is alive; the UI's LIVE indicator observes this. */
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+    }
 
     inner class LocalBinder : Binder() {
         fun getService(): TowerMonitoringService = this@TowerMonitoringService
@@ -75,6 +85,8 @@ class TowerMonitoringService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        _isRunning.value = true
+        monitoringStartedAt = System.currentTimeMillis()
         val database = AppDatabase.getDatabase(this, serviceScope)
         repository = CellRepository(database.cellDao(), this)
         telephonyTracker = TelephonyTracker(this)
@@ -288,19 +300,31 @@ class TowerMonitoringService : Service() {
     private fun triggerAlertsEngine(prev: CellModel, current: CellModel, source: String) {
         // 1. Notify on band change
         if (prev.bandName != current.bandName && getSharedPreferences("TowerLockPrefs", MODE_PRIVATE).getBoolean("alert_band", false)) {
-            triggerAlert("Band Changed", "Moved from ${prev.bandName} to ${current.bandName}")
+            triggerAlert(
+                "Band Changed", "Moved from ${prev.bandName} to ${current.bandName}",
+                R.drawable.ic_swap, 0xFFF59E0B.toInt()
+            )
         }
         // 2. SA <-> NSA transition
         if (prev.tech != current.tech && getSharedPreferences("TowerLockPrefs", MODE_PRIVATE).getBoolean("alert_tech", false)) {
-            triggerAlert("Technology Shift", "Connection shifted from ${prev.tech} to ${current.tech}")
+            triggerAlert(
+                "Technology Shift", "Connection shifted from ${prev.tech} to ${current.tech}",
+                R.drawable.ic_swap, 0xFF0EA5E9.toInt()
+            )
         }
         // 3. RSRP below threshold
         if (current.rsrp < alertRsearchBelow && prev.rsrp >= alertRsearchBelow && getSharedPreferences("TowerLockPrefs", MODE_PRIVATE).getBoolean("alert_rsrp", false)) {
-            triggerAlert("Weak Signal Alert", "RSRP dropped below threshold to ${current.rsrp} dBm")
+            triggerAlert(
+                "Weak Signal Alert", "RSRP dropped below threshold to ${current.rsrp} dBm",
+                R.drawable.ic_warning, 0xFFF59E0B.toInt()
+            )
         }
         // 4. Connecting to an unmapped tower
         if (source == "Unmapped cell" && getSharedPreferences("TowerLockPrefs", MODE_PRIVATE).getBoolean("alert_unmapped", false)) {
-            triggerAlert("Unmapped Tower Detected", "Connected to cell ${current.cellId} which is not mapped.")
+            triggerAlert(
+                "Unmapped Tower Detected", "Connected to cell ${current.cellId} which is not mapped.",
+                R.drawable.ic_cell_tower, 0xFFEF4444.toInt()
+            )
         }
         // 5. 5G SA to LTE Drop
         val isPrev5gSa = prev.tech == "5G SA"
@@ -319,7 +343,18 @@ class TowerMonitoringService : Service() {
                 } else {
                     "location unavailable"
                 }
-                triggerAlert("5G Connection Dropped", "Device switched from 5G SA to legacy LTE at: $locationLabel")
+                // Deep link to the Map tab, centered on where the drop happened.
+                val dropPendingIntent = tabPendingIntent(4, 1) {
+                    if (userLoc != null) {
+                        putExtra(MainActivity.EXTRA_FOCUS_LAT, userLoc.latitude)
+                        putExtra(MainActivity.EXTRA_FOCUS_LON, userLoc.longitude)
+                    }
+                }
+                triggerAlert(
+                    "5G Connection Dropped",
+                    "Device switched from 5G SA to legacy LTE at: $locationLabel",
+                    R.drawable.ic_trending_down, 0xFFEF4444.toInt(), dropPendingIntent
+                )
 
                 if (prefs.getBoolean("log_drop_coords", true) && userLoc != null) {
                     serviceScope.launch {
@@ -361,20 +396,29 @@ class TowerMonitoringService : Service() {
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 PackageManager.PERMISSION_GRANTED
 
-    private fun triggerAlert(title: String, body: String) {
+    private fun triggerAlert(
+        title: String,
+        body: String,
+        smallIcon: Int = R.drawable.ic_warning,
+        accentColor: Int = 0xFFF59E0B.toInt(),
+        contentIntent: PendingIntent? = null
+    ) {
         if (!canPostNotifications()) return
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        val defaultIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+        val defaultPendingIntent = PendingIntent.getActivity(this, 0, defaultIntent, PendingIntent.FLAG_IMMUTABLE)
 
         val builder = NotificationCompat.Builder(this, "Alerts")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(smallIcon)
+            .setColor(accentColor)
             .setContentTitle(title)
             .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(contentIntent ?: defaultPendingIntent)
+            .setGroup(ALERT_GROUP)
             .setAutoCancel(true)
 
         if (getSharedPreferences("TowerLockPrefs", MODE_PRIVATE).getBoolean("alert_vibrate", true)) {
@@ -383,6 +427,16 @@ class TowerMonitoringService : Service() {
 
         try {
             notificationManager.notify(alertNotificationId.incrementAndGet(), builder.build())
+            // Group summary keeps the shade collapsed to one entry when alerts stack up.
+            val summary = NotificationCompat.Builder(this, "Alerts")
+                .setSmallIcon(R.drawable.ic_cell_tower)
+                .setColor(0xFF10B981.toInt())
+                .setContentTitle("TowerLock alerts")
+                .setGroup(ALERT_GROUP)
+                .setGroupSummary(true)
+                .setAutoCancel(true)
+                .build()
+            notificationManager.notify(ALERT_SUMMARY_ID, summary)
         } catch (e: SecurityException) {
             Log.w("TowerMonitoringService", "Alert notification rejected", e)
         }
@@ -444,9 +498,52 @@ class TowerMonitoringService : Service() {
         return "$joinedBands$caText"
     }
 
+    /** Signal-grade color used for notification accents and the RSRP readout. */
+    private fun signalColorInt(rsrp: Int): Int = when {
+        rsrp >= -80 -> 0xFF4CAF50.toInt()
+        rsrp >= -95 -> 0xFF8BC34A.toInt()
+        rsrp >= -110 -> 0xFFFFB74D.toInt()
+        else -> 0xFFE57373.toInt()
+    }
+
+    /** Deep link into MainActivity on a given tab (0=Status, 1=Map, 2=Logs, 3=Settings). */
+    private fun tabPendingIntent(requestCode: Int, tab: Int, extras: Intent.() -> Unit = {}): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(MainActivity.EXTRA_OPEN_TAB, tab)
+            extras()
+        }
+        return PendingIntent.getActivity(
+            this, requestCode, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    /** Fills the fields shared by the collapsed and expanded notification layouts. */
+    private fun populateHeaderRow(views: RemoteViews, cell: CellModel, hasSignal: Boolean) {
+        val carrier = if (hasSignal) (cell.operatorName ?: "Carrier") else "TowerLock"
+        views.setTextViewText(R.id.notif_carrier, carrier)
+        if (hasSignal) {
+            views.setViewVisibility(R.id.notif_tech, View.VISIBLE)
+            views.setTextViewText(R.id.notif_tech, cell.tech)
+            views.setInt(
+                R.id.notif_tech, "setBackgroundResource",
+                if (cell.tech.contains("5G")) R.drawable.bg_chip_5g else R.drawable.bg_chip_lte
+            )
+            views.setTextViewText(R.id.notif_rsrp, "${cell.rsrp} dBm")
+            views.setTextColor(R.id.notif_rsrp, signalColorInt(cell.rsrp))
+        } else {
+            views.setViewVisibility(R.id.notif_tech, View.GONE)
+            views.setTextViewText(R.id.notif_rsrp, "--")
+            views.setTextColor(R.id.notif_rsrp, 0xFF94A3B8.toInt())
+        }
+    }
+
     private fun createNotification(cell: CellModel): Notification {
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+        val hasSignal = cell.cellId > 0
+        val contentIntent = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
 
         // Actions
         val pauseIntent = Intent(this, TowerMonitoringService::class.java).apply {
@@ -459,64 +556,93 @@ class TowerMonitoringService : Service() {
         }
         val snapshotPendingIntent = PendingIntent.getService(this, 2, snapshotIntent, PendingIntent.FLAG_IMMUTABLE)
 
-        val bandSummary = getBandSummary(cell)
-        val textSummary = "${cell.tech} • $bandSummary • ${cell.rsrp} dBm"
+        val stopIntent = Intent(this, TowerMonitoringService::class.java).apply {
+            action = "ACTION_STOP"
+        }
+        val stopPendingIntent = PendingIntent.getService(this, 3, stopIntent, PendingIntent.FLAG_IMMUTABLE)
 
-        val gnbLabel = if (cell.tech.contains("5G")) "gNB" else "eNB"
-        val towerNodeb = if (cell.nodebId > 0) "${cell.nodebId}" else "Unknown"
-        val sectorText = if (cell.sectorId >= 0) "Sector ${cell.sectorId}" else "Sector N/A"
+        val collapsed = RemoteViews(packageName, R.layout.notification_collapsed)
+        populateHeaderRow(collapsed, cell, hasSignal)
 
-        val addressText = _resolvedAddress.value.ifBlank { "Resolving location..." }
+        val expanded = RemoteViews(packageName, R.layout.notification_expanded)
+        populateHeaderRow(expanded, cell, hasSignal)
+        expanded.setTextViewText(
+            R.id.notif_address,
+            if (hasSignal) _resolvedAddress.value.ifBlank { "Resolving location..." }
+            else "Acquiring signal — waiting for the modem to report a serving cell."
+        )
+        // Tapping the address jumps straight to the Map tab.
+        expanded.setOnClickPendingIntent(R.id.notif_address, tabPendingIntent(5, 1))
 
-        val caSummary = if (cell.activeCarriers.size > 1) {
-            val carriersJoined = cell.activeCarriers.joinToString(" + ") { carrier ->
-                "<b>${carrier.band}</b> (${carrier.rsrp} dBm)"
+        // One pre-tinted bar per grade; RemoteViews can't retint a single bar below API 31.
+        val allBars = listOf(
+            R.id.notif_bar_excellent, R.id.notif_bar_good, R.id.notif_bar_fair, R.id.notif_bar_poor
+        )
+        allBars.forEach { expanded.setViewVisibility(it, View.GONE) }
+        if (hasSignal) {
+            val activeBar = when {
+                cell.rsrp >= -80 -> R.id.notif_bar_excellent
+                cell.rsrp >= -95 -> R.id.notif_bar_good
+                cell.rsrp >= -110 -> R.id.notif_bar_fair
+                else -> R.id.notif_bar_poor
             }
-            "Active (${cell.activeCarriers.size}CC): $carriersJoined"
+            expanded.setViewVisibility(activeBar, View.VISIBLE)
+            val percent = ((cell.rsrp + 140) * 100 / 90).coerceIn(0, 100)
+            expanded.setProgressBar(activeBar, 100, percent, false)
         } else {
-            "Standby"
+            expanded.setViewVisibility(R.id.notif_bar_poor, View.VISIBLE)
+            expanded.setProgressBar(R.id.notif_bar_poor, 100, 0, false)
         }
 
-        val htmlContent = """
-            <b>📍 Tower:</b> $addressText<br/>
-            <b>📶 RF Link:</b> ${cell.tech} • <b>$bandSummary</b> • <b>${cell.frequencyMhz} MHz</b><br/>
-            <b>⚡ Signal:</b> <b>${cell.rsrp} dBm</b> (SINR: <b>${cell.sinr} dB</b>) • ${cell.signalGrade}<br/>
-            <b>🆔 Cell ID:</b> $gnbLabel <b>$towerNodeb</b> • $sectorText • PCI <b>${cell.pci}</b> • TAC <b>${cell.tac}</b><br/>
-            <b>🔗 Carrier Aggregation:</b> $caSummary
-        """.trimIndent()
-
-        val spannedBigText = HtmlCompat.fromHtml(
-            htmlContent,
-            HtmlCompat.FROM_HTML_MODE_LEGACY
+        val gnbLabel = if (cell.tech.contains("5G")) "gNB" else "eNB"
+        expanded.setTextViewText(R.id.notif_band, if (hasSignal) getBandSummary(cell) else "—")
+        expanded.setTextViewText(
+            R.id.notif_cellid,
+            if (hasSignal) "$gnbLabel ${cell.nodebId} • ${cell.cellId}" else "—"
         )
-
-        val spannedTitle = HtmlCompat.fromHtml(
-            "TowerLock • <b>${cell.operatorName ?: "Cell Monitor"}</b>",
-            HtmlCompat.FROM_HTML_MODE_LEGACY
+        expanded.setTextViewText(
+            R.id.notif_pcitac,
+            if (hasSignal) "${cell.pci} / ${cell.tac}" else "—"
+        )
+        expanded.setTextViewText(
+            R.id.notif_ca,
+            when {
+                !hasSignal -> "—"
+                cell.activeCarriers.size > 1 -> "${cell.activeCarriers.size}CC Active"
+                else -> "Standby"
+            }
         )
 
         val iconText = when (iconStyle) {
             "dBm" -> "${cell.rsrp}"
             "band" -> cell.bandName.substringBefore(" ").replace("n", "").replace("B", "")
             "tech" -> if (cell.tech.contains("5G")) "5G" else "4G"
-            else -> "Bars"
+            else -> "bars"
         }
 
-        val dynamicIcon = createDynamicIcon(iconText)
-
-        val builder = NotificationCompat.Builder(this, "Monitoring")
-            .setContentTitle(spannedTitle)
-            .setContentText(textSummary)
+        return NotificationCompat.Builder(this, "Monitoring")
+            .setSmallIcon(createDynamicIcon(iconText, cell.rsrp))
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(collapsed)
+            .setCustomBigContentView(expanded)
+            .setSubText(if (hasSignal) getBandSummary(cell) else "Acquiring signal")
+            .setColor(if (hasSignal) signalColorInt(cell.rsrp) else 0xFF10B981.toInt())
+            // Silent, stable presence in the shade: never re-alert or re-sort on updates.
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .setContentIntent(pendingIntent)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(spannedBigText))
-            .addAction(R.drawable.ic_launcher_foreground, if (isLoggingPaused) "Resume" else "Pause Logging", pausePendingIntent)
-            .addAction(R.drawable.ic_launcher_foreground, "Snapshot", snapshotPendingIntent)
-
-        builder.setSmallIcon(dynamicIcon)
-
-        return builder.build()
+            .setContentIntent(contentIntent)
+            .setWhen(monitoringStartedAt)
+            .setShowWhen(true)
+            .setUsesChronometer(true)
+            .addAction(
+                if (isLoggingPaused) R.drawable.ic_play else R.drawable.ic_pause,
+                if (isLoggingPaused) "Resume" else "Pause",
+                pausePendingIntent
+            )
+            .addAction(R.drawable.ic_camera, "Snapshot", snapshotPendingIntent)
+            .addAction(R.drawable.ic_stop, "Stop", stopPendingIntent)
+            .build()
     }
 
     private fun updateNotification(cell: CellModel) {
@@ -529,46 +655,67 @@ class TowerMonitoringService : Service() {
         }
     }
 
-    private fun createDynamicIcon(text: String): androidx.core.graphics.drawable.IconCompat {
-        val size = 64
+    /**
+     * Renders the status-bar icon. Status-bar icons are treated as alpha masks by
+     * the system, so this draws white-on-transparent (the old filled circle showed
+     * up as a solid blob on most devices). The signal color lives in the
+     * notification accent instead.
+     */
+    private fun createDynamicIcon(text: String, rsrp: Int): androidx.core.graphics.drawable.IconCompat {
+        val size = 96
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        
-        // Background Circle for visual depth
-        val bgPaint = Paint().apply {
-            color = if (text.startsWith("-") || text.all { it.isDigit() }) {
-                val num = text.toIntOrNull() ?: -100
-                when {
-                    num >= -80 -> 0xFF4CAF50.toInt()
-                    num >= -95 -> 0xFF8BC34A.toInt()
-                    num >= -110 -> 0xFFFFB74D.toInt()
-                    else -> 0xFFE57373.toInt()
-                }
-            } else {
-                0xFF2196F3.toInt()
-            }
-            style = Paint.Style.FILL
-            isAntiAlias = true
-        }
-        canvas.drawCircle(size / 2f, size / 2f, size / 2f, bgPaint)
 
-        val paint = Paint().apply {
-            color = Color.WHITE
-            textSize = if (text.length > 3) 20f else 26f
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        if (text == "bars") {
+            // Classic signal-bars glyph; filled count follows the grade.
+            val filled = when {
+                rsrp >= -80 -> 4
+                rsrp >= -95 -> 3
+                rsrp >= -110 -> 2
+                else -> 1
+            }
+            val barWidth = 16f
+            val gap = 8f
+            for (i in 0 until 4) {
+                val barHeight = 28f + i * 20f
+                val left = 2f + i * (barWidth + gap)
+                val paint = Paint().apply {
+                    color = Color.WHITE
+                    isAntiAlias = true
+                    alpha = if (i < filled) 255 else 70
+                }
+                canvas.drawRoundRect(left, size - barHeight, left + barWidth, size.toFloat(), 4f, 4f, paint)
+            }
+        } else {
+            val paint = Paint().apply {
+                color = Color.WHITE
+                isAntiAlias = true
+                textAlign = Paint.Align.CENTER
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                textSize = when {
+                    text.length <= 2 -> 60f
+                    text.length == 3 -> 48f
+                    text.length == 4 -> 40f
+                    else -> 32f
+                }
+            }
+            val xPos = size / 2f
+            val yPos = (size / 2f) - ((paint.descent() + paint.ascent()) / 2f)
+            canvas.drawText(text, xPos, yPos, paint)
         }
-        
-        val xPos = canvas.width / 2f
-        val yPos = (canvas.height / 2f) - ((paint.descent() + paint.ascent()) / 2f)
-        canvas.drawText(text, xPos, yPos, paint)
 
         return androidx.core.graphics.drawable.IconCompat.createWithBitmap(bitmap)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            "ACTION_STOP" -> {
+                // User asked to stop from the notification: leave foreground state,
+                // remove the notification, and don't let START_STICKY revive us.
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
             "ACTION_PAUSE" -> {
                 isLoggingPaused = !isLoggingPaused
                 updateNotification(_currentCell.value)
@@ -601,9 +748,15 @@ class TowerMonitoringService : Service() {
                             source = "Manual Snapshot"
                         )
                         repository.insertLog(snapshotLog)
-                        triggerAlert("Snapshot Saved", "Serving cell state recorded in log history.")
+                        triggerAlert(
+                            "Snapshot Saved", "Serving cell state recorded in log history.",
+                            R.drawable.ic_camera, 0xFF10B981.toInt()
+                        )
                     } else if (current.cellId > 0) {
-                        triggerAlert("Snapshot Failed", "GPS location not yet available; try again shortly.")
+                        triggerAlert(
+                            "Snapshot Failed", "GPS location not yet available; try again shortly.",
+                            R.drawable.ic_camera, 0xFFEF4444.toInt()
+                        )
                     }
                 }
             }
@@ -657,9 +810,12 @@ class TowerMonitoringService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        _isRunning.value = false
         locationTracker.stopLocationTracking()
         telephonyTracker.stopMonitoring()
         releaseWakeLock()
         serviceScope.cancel()
+        // Flip the home-screen widget to its OFFLINE state instead of showing stale data.
+        com.example.widget.TowerLockWidget.clearWidgetState(this)
     }
 }
